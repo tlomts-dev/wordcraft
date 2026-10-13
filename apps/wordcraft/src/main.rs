@@ -47,8 +47,14 @@ impl eframe::App for App {
         self.3.show(frame);
         let prev = self.0.ui.window;
         self.0.ui.window = ctx.input(|i| WindowGeometry::track(prev, i.viewport(), i.viewport_rect().size()));
+        // The first frame, once the monitor is known (as `take_rescue` waits for): maximize a
+        // window that opened at its normal size so it never flashed on screen half-opened.
+        let maximize = self.1.and_then(|g| g.maximize_after_open()).filter(|_| ctx.input(|i| i.viewport().monitor_size.is_some()));
         if let Some(pos) = ctx.input(|i| take_rescue(&mut self.1, i.viewport())) {
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
+        }
+        if let Some(command) = maximize {
+            ctx.send_viewport_cmd(command);
         }
         // The window's close button: with unsaved changes, ask first (`WordApp::close_requested`).
         let closing = ctx.input(|i| i.viewport().close_requested());
