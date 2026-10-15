@@ -9,6 +9,8 @@
 //!
 //! Export writes the same constructs; pictures become `![alt](media-name)` placeholders.
 
+use std::collections::HashMap;
+
 use wordcraft_doc::{Align, Document};
 
 use crate::html::decode_entity;
@@ -23,6 +25,11 @@ const MAX_NEST: usize = 32;
 /// Parse Markdown text into a document.
 pub fn import(text: &str) -> Document {
     model::to_doc(&parse(text))
+}
+
+/// [`import`] onto `page`: Markdown gives no page size (#1381).
+pub fn import_on(text: &str, page: &wordcraft_doc::SectionProps) -> Document {
+    model::to_doc_in(&parse(text), page.clone())
 }
 
 /// Parse Markdown text into the flow model.
@@ -160,22 +167,30 @@ fn list_marker(t: &str) -> Option<Marker> {
 fn split_row(l: &str) -> Vec<String> {
     let t = l.trim();
     let t = t.strip_prefix('|').unwrap_or(t);
-    let t = if t.ends_with('|') && !t.ends_with("\\|") { &t[..t.len() - 1] } else { t };
+    let t = if let Some(before) = t.strip_suffix('|') {
+        let num_bs = before.chars().rev().take_while(|&c| c == '\\').count();
+        if num_bs % 2 == 0 { before } else { t }
+    } else {
+        t
+    };
     let mut cells = Vec::new();
     let mut cur = String::new();
     let mut chars = t.chars().peekable();
-    let mut in_code = false;
     while let Some(c) = chars.next() {
         match c {
-            '\\' if chars.peek() == Some(&'|') => {
-                cur.push('|');
-                chars.next();
-            }
-            '`' => {
-                in_code = !in_code;
-                cur.push(c);
-            }
-            '|' if !in_code => cells.push(std::mem::take(&mut cur).trim().to_string()),
+            '\\' => match chars.peek() {
+                Some(&'|') => {
+                    cur.push('|');
+                    chars.next();
+                }
+                Some(&'\\') => {
+                    cur.push('\\');
+                    cur.push('\\');
+                    chars.next();
+                }
+                _ => cur.push('\\'),
+            },
+            '|' => cells.push(std::mem::take(&mut cur).trim().to_string()),
             _ => cur.push(c),
         }
     }
@@ -543,10 +558,11 @@ fn push_text(nodes: &mut Vec<Node>, s: &str, f: &Fmt) {
 }
 
 /// The closing `]` matching the `[` at byte `open` (escapes and code spans respected). Gives up
-/// after looking `max` bytes ahead.
-fn matching_bracket(s: &str, open: usize, max: usize) -> Option<usize> {
+/// after looking `max` bytes ahead. Records in `known` every bracket pair it passes, and every `[`
+/// still open at the end of the text: a scan from one of those would take the same path.
+fn matching_bracket(s: &str, open: usize, max: usize, ticks: &Backticks, known: &mut HashMap<usize, Option<usize>>) -> Option<usize> {
     let b = s.as_bytes();
-    let mut depth = 0usize;
+    let mut opens: Vec<usize> = Vec::new();
     let mut i = open;
     while let Some(&c) = b.get(i) {
         if i - open > max {
@@ -556,16 +572,18 @@ fn matching_bracket(s: &str, open: usize, max: usize) -> Option<usize> {
             b'\\' => i += 1,
             b'`' => {
                 let n = b.get(i..).map(|r| r.iter().take_while(|x| **x == b'`').count()).unwrap_or(1);
-                if let Some(end) = find_backticks(s, i + n, n) {
+                if let Some(end) = ticks.find(i + n, n) {
                     i = end + n - 1;
                 } else {
                     i += n - 1;
                 }
             }
-            b'[' => depth += 1,
+            b'[' => opens.push(i),
             b']' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
+                if let Some(o) = opens.pop() {
+                    known.insert(o, Some(i));
+                }
+                if opens.is_empty() {
                     return Some(i);
                 }
             }
@@ -573,25 +591,39 @@ fn matching_bracket(s: &str, open: usize, max: usize) -> Option<usize> {
         }
         i += 1;
     }
+    for o in opens {
+        known.insert(o, None);
+    }
     None
 }
 
-/// Byte index of a run of exactly `n` backticks at or after `from`.
-fn find_backticks(s: &str, from: usize, n: usize) -> Option<usize> {
-    let b = s.as_bytes();
-    let mut i = from;
-    while let Some(&c) = b.get(i) {
-        if c == b'`' {
-            let k = b.get(i..).map(|r| r.iter().take_while(|x| **x == b'`').count()).unwrap_or(1);
-            if k == n {
-                return Some(i);
+/// Where a text's runs of backticks start, by run length. Finding the run that closes a code span
+/// is then a lookup: scanning the rest of the text for it, again for every run nothing closes
+/// (each of a different length) and from every link bracket over them, was superlinear.
+struct Backticks(HashMap<usize, Vec<usize>>);
+
+impl Backticks {
+    fn new(s: &str) -> Self {
+        let b = s.as_bytes();
+        let mut runs: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut i = 0;
+        while let Some(&c) = b.get(i) {
+            if c == b'`' {
+                let k = b.get(i..).map(|r| r.iter().take_while(|x| **x == b'`').count()).unwrap_or(1);
+                runs.entry(k).or_default().push(i);
+                i += k;
+            } else {
+                i += 1;
             }
-            i += k;
-        } else {
-            i += 1;
         }
+        Self(runs)
     }
-    None
+
+    /// Byte index of a run of exactly `n` backticks at or after `from` (which is not inside a run).
+    fn find(&self, from: usize, n: usize) -> Option<usize> {
+        let starts = self.0.get(&n)?;
+        starts.get(starts.partition_point(|&p| p < from)).copied()
+    }
 }
 
 /// Parse `(dest "title")` at byte `at` (which holds `(`): (destination, index after `)`).
@@ -693,8 +725,11 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
     let mut nodes: Vec<Node> = Vec::new();
     // Bytes the link and image scans below may look ahead in total. Each unmatched `[` or `![(`
     // would otherwise rescan the rest of the text, which is quadratic on hostile input; once the
-    // budget is gone, further brackets are plain text.
+    // budget is gone, further brackets are plain text. A scan pays for what it reads; brackets an
+    // earlier scan passed are looked up in `known` instead.
     let mut scan_budget = s.len().saturating_mul(8).saturating_add(8192);
+    let ticks = Backticks::new(s);
+    let mut known: HashMap<usize, Option<usize>> = HashMap::new();
     let b = s.as_bytes();
     let mut i = 0usize;
     let mut text_start = 0usize;
@@ -724,7 +759,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
             b'`' => {
                 flush!();
                 let n = b.get(i..).map(|r| r.iter().take_while(|x| **x == b'`').count()).unwrap_or(1);
-                match find_backticks(s, i + n, n) {
+                match ticks.find(i + n, n) {
                     Some(end) => {
                         let mut code = s.get(i + n..end).unwrap_or("").replace('\n', " ");
                         if code.len() >= 2 && code.starts_with(' ') && code.ends_with(' ') && !code.trim().is_empty() {
@@ -766,13 +801,21 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
             b'!' | b'[' if depth < MAX_NEST => {
                 let img = c == b'!';
                 let open = if img { i + 1 } else { i };
-                let parsed = if b.get(open) == Some(&b'[') && scan_budget > 0 {
-                    let found = matching_bracket(s, open, scan_budget);
-                    scan_budget = scan_budget.saturating_sub(found.map_or(scan_budget, |close| close - open));
-                    found.and_then(|close| {
+                let parsed = if b.get(open) == Some(&b'[') {
+                    let found = match known.get(&open).copied() {
+                        Some(found) => found,
+                        None if scan_budget > 0 => {
+                            let found = matching_bracket(s, open, scan_budget, &ticks, &mut known);
+                            scan_budget = scan_budget.saturating_sub(found.unwrap_or(s.len()).saturating_sub(open));
+                            found
+                        }
+                        None => None,
+                    };
+                    found.filter(|close| b.get(close + 1) == Some(&b'(') && scan_budget > 0).and_then(|close| {
                         // A destination that does not parse may have been read to the end of the text.
-                        scan_budget = scan_budget.saturating_sub(s.len().saturating_sub(close));
-                        let (dest, end) = link_dest(s, close + 1)?;
+                        let dest = link_dest(s, close + 1);
+                        scan_budget = scan_budget.saturating_sub(dest.as_ref().map_or(s.len(), |d| d.1).saturating_sub(close));
+                        let (dest, end) = dest?;
                         Some((s.get(open + 1..close)?.to_string(), dest, end))
                     })
                 } else {
@@ -1079,6 +1122,14 @@ enum Mark {
 
 /// Inline spans → Markdown with properly nested markers.
 fn inlines_md(inlines: &[Inline]) -> String {
+    inlines_md_impl(inlines, false)
+}
+
+fn inlines_md_table(inlines: &[Inline]) -> String {
+    inlines_md_impl(inlines, true)
+}
+
+fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
     // Split into (text, fmt) pieces with whitespace moved outside emphasis.
     let mut pieces: Vec<(String, Fmt, Option<String>)> = Vec::new();
     let inlines = crate::model::equations_as_text(inlines);
@@ -1159,7 +1210,12 @@ fn inlines_md(inlines: &[Inline]) -> String {
             }
         }
         if f.code {
-            out.push_str(&code_span(&text));
+            if in_table {
+                let t = text.replace('|', "\\|");
+                out.push_str(&code_span(&t));
+            } else {
+                out.push_str(&code_span(&text));
+            }
         } else {
             out.push_str(&escape(&text).replace('\n', "\\\n").replace('\t', "    "));
         }
@@ -1189,7 +1245,7 @@ fn table_md(t: &FTable, out: &mut Vec<String>) {
         let mut parts = Vec::new();
         for b in &c.blocks {
             match b {
-                FBlock::Para(p) => parts.push(inlines_md(&p.inlines).replace("\\\n", "<br>")),
+                FBlock::Para(p) => parts.push(inlines_md_table(&p.inlines).replace("\\\n", "<br>")),
                 FBlock::Table(inner) => parts.push(escape(&inner.rows.iter().flat_map(|r| r.iter().map(Cell::text)).collect::<Vec<_>>().join(" "))),
             }
         }
@@ -1298,7 +1354,13 @@ fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                         let pad = " ".repeat(4 * lv);
                         let cont = " ".repeat(4 * lv + marker.len() + 1);
                         let body = body.replace("\\\n", &format!("\\\n{cont}"));
-                        let body = if p.kind == Kind::Code { code_span(&p.text()) } else { body };
+                        let body = if p.kind == Kind::Code {
+                            code_span(&p.text())
+                        } else {
+                            let body = escape_line_start(body);
+                            // The bullet marker can turn a short run of hyphens into a rule.
+                            if thematic_break(&format!("{marker} {body}")) { format!("\\{body}") } else { body }
+                        };
                         out.push(format!("{pad}{marker} {body}").trim_end().to_string());
                         prev_list = true;
                         let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some());
@@ -1412,5 +1474,195 @@ mod tests {
         let FBlock::Para(q) = &back.blocks[0] else { panic!() };
         assert_eq!(q.text(), "1. not a list *really*");
         assert!(q.list.is_none());
+    }
+
+    #[test]
+    fn single_backtick_code_span_escaped_pipe() {
+        let md = "| Command | Status |\n| --- | --- |\n| `cmd \\| grep` | pass |\n";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(t.rows[1].len(), 2);
+        let FBlock::Para(p0) = &t.rows[1][0].blocks[0] else { panic!() };
+        assert_eq!(p0.inlines.len(), 1);
+        assert!(matches!(&p0.inlines[0], Inline::Text(t, f) if t == "cmd | grep" && f.code));
+        let FBlock::Para(p1) = &t.rows[1][1].blocks[0] else { panic!() };
+        assert_eq!(p1.text(), "pass");
+
+        let mut out = Vec::new();
+        table_md(t, &mut out);
+        let exported = out.join("\n");
+        assert!(exported.contains("`cmd \\| grep`"), "Exported: {exported}");
+    }
+
+    #[test]
+    fn double_backtick_code_span_escaped_pipe() {
+        let md = "| Syntax | Note |\n| --- | --- |\n| ``a \\| b`` | second |\n";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(t.rows[1].len(), 2);
+        let FBlock::Para(p0) = &t.rows[1][0].blocks[0] else { panic!() };
+        assert_eq!(p0.inlines.len(), 1);
+        assert!(matches!(&p0.inlines[0], Inline::Text(t, f) if t == "a | b" && f.code));
+        let FBlock::Para(p1) = &t.rows[1][1].blocks[0] else { panic!() };
+        assert_eq!(p1.text(), "second");
+    }
+
+    #[test]
+    fn code_span_literal_backtick_and_escaped_pipe() {
+        let md = "| Expression | Detail |\n| --- | --- |\n| ``a`b\\|c`` | distinct |\n";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(t.rows[1].len(), 2);
+        let FBlock::Para(p0) = &t.rows[1][0].blocks[0] else { panic!() };
+        assert_eq!(p0.inlines.len(), 1);
+        assert!(matches!(&p0.inlines[0], Inline::Text(t, f) if t == "a`b|c" && f.code));
+        let FBlock::Para(p1) = &t.rows[1][1].blocks[0] else { panic!() };
+        assert_eq!(p1.text(), "distinct");
+    }
+
+    #[test]
+    fn three_column_table_with_distinctive_text() {
+        let md = "| Col1 | Col2 | Col3 |\n| --- | --- | --- |\n| `p1\\|q1` | Distinctive Two | Distinctive Three |\n";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(t.rows[1].len(), 3);
+        assert_eq!(t.rows[1][0].text(), "p1|q1");
+        assert_eq!(t.rows[1][1].text(), "Distinctive Two");
+        assert_eq!(t.rows[1][2].text(), "Distinctive Three");
+        let FBlock::Para(p0) = &t.rows[1][0].blocks[0] else { panic!() };
+        assert!(matches!(&p0.inlines[0], Inline::Text(_, f) if f.code));
+        let FBlock::Para(p1) = &t.rows[1][1].blocks[0] else { panic!() };
+        assert!(matches!(&p1.inlines[0], Inline::Text(_, f) if !f.code));
+        let FBlock::Para(p2) = &t.rows[1][2].blocks[0] else { panic!() };
+        assert!(matches!(&p2.inlines[0], Inline::Text(_, f) if !f.code));
+    }
+
+    #[test]
+    fn regular_table_cells_containing_escaped_pipes() {
+        let md = "| Option | Description |\n| --- | --- |\n| Regular \\| Pipe | Normal text cell |\n";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(t.rows[1].len(), 2);
+        assert_eq!(t.rows[1][0].text(), "Regular | Pipe");
+        assert_eq!(t.rows[1][1].text(), "Normal text cell");
+        let FBlock::Para(p0) = &t.rows[1][0].blocks[0] else { panic!() };
+        assert!(matches!(&p0.inlines[0], Inline::Text(_, f) if !f.code));
+
+        let mut out = Vec::new();
+        table_md(t, &mut out);
+        let exported = out.join("\n");
+        assert!(exported.contains("Regular \\| Pipe"), "Exported: {exported}");
+        assert!(!exported.contains("Regular \\\\| Pipe"), "Exported: {exported}");
+    }
+
+    #[test]
+    fn unescaped_pipes_behave_as_gfm_column_separators() {
+        let md = "| Header 1 | Header 2 |\n| --- | --- |\n| `raw|pipe` | Extra Column |\n";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+        assert_eq!(t.rows.len(), 2);
+        assert_eq!(t.rows[1].len(), 2);
+        assert_eq!(t.rows[1][0].text(), "`raw");
+        assert_eq!(t.rows[1][1].text(), "pipe`");
+    }
+
+    #[test]
+    fn ordinary_tables_and_standalone_code_spans_unchanged() {
+        let md = "| Alpha | Beta |\n| --- | --- |\n| 1 | 2 |\n";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!() };
+        let mut out = Vec::new();
+        table_md(t, &mut out);
+        assert_eq!(out.join("\n"), "| Alpha | Beta |\n| --- | --- |\n| 1 | 2 |");
+
+        let mut p = Para::default();
+        let f = Fmt { code: true, ..Default::default() };
+        p.push_text("cmd | grep", &f);
+        let exported = inlines_md(&p.inlines);
+        assert_eq!(exported, "`cmd | grep`");
+    }
+
+    #[test]
+    fn table_code_pipe_export_import_round_trip() {
+        let mut table = FTable::default();
+        let mut cell_a = Cell::default();
+        let mut para_a = Para::default();
+        let fmt_a = Fmt { code: true, ..Default::default() };
+        para_a.push_text("a`b|c", &fmt_a);
+        cell_a.blocks.push(FBlock::Para(para_a));
+
+        let mut cell_b = Cell::default();
+        let mut para_b = Para::default();
+        para_b.push_text("CRITICAL_DISTINCTIVE_INFO", &Fmt::default());
+        cell_b.blocks.push(FBlock::Para(para_b));
+
+        let mut head_a = Cell::default();
+        let mut head_para_a = Para::default();
+        head_para_a.push_text("Col A", &Fmt::default());
+        head_a.blocks.push(FBlock::Para(head_para_a));
+
+        let mut head_b = Cell::default();
+        let mut head_para_b = Para::default();
+        head_para_b.push_text("Col B", &Fmt::default());
+        head_b.blocks.push(FBlock::Para(head_para_b));
+
+        table.rows.push(vec![head_a, head_b]);
+        table.rows.push(vec![cell_a, cell_b]);
+
+        let mut out = Vec::new();
+        table_md(&table, &mut out);
+        let exported_md = out.join("\n");
+
+        assert!(exported_md.contains("``a`b\\|c``"), "Exported: {exported_md}");
+        assert!(exported_md.contains("CRITICAL\\_DISTINCTIVE\\_INFO"), "Exported: {exported_md}");
+
+        let back_flow = parse(&exported_md);
+        let FBlock::Table(back_table) = &back_flow.blocks[0] else { panic!("expected table") };
+
+        assert_eq!(back_table.rows.len(), 2, "Both rows must exist");
+        let row1 = &back_table.rows[1];
+        assert_eq!(row1.len(), 2, "Both cells must exist in row 1");
+
+        let back_cell_a = &row1[0];
+        let back_cell_b = &row1[1];
+        assert_eq!(back_cell_a.text(), "a`b|c", "Cell A text must be preserved");
+        assert_eq!(back_cell_b.text(), "CRITICAL_DISTINCTIVE_INFO", "Cell B text must be preserved");
+
+        let FBlock::Para(back_p_a) = &back_cell_a.blocks[0] else { panic!() };
+        assert_eq!(back_p_a.inlines.len(), 1);
+        assert!(
+            matches!(&back_p_a.inlines[0], Inline::Text(t, f) if t == "a`b|c" && f.code),
+            "Code formatting must remain intact on Cell A: {:?}",
+            back_p_a.inlines
+        );
+
+        let FBlock::Para(back_p_b) = &back_cell_b.blocks[0] else { panic!() };
+        assert_eq!(back_p_b.inlines.len(), 1);
+        assert!(
+            matches!(&back_p_b.inlines[0], Inline::Text(t, f) if t == "CRITICAL_DISTINCTIVE_INFO" && !f.code),
+            "Cell B formatting must remain plain text: {:?}",
+            back_p_b.inlines
+        );
+
+        assert_eq!(back_cell_a.text(), "a`b|c");
+        assert_eq!(back_cell_b.text(), "CRITICAL_DISTINCTIVE_INFO");
+
+        assert!(!back_cell_a.text().contains("CRITICAL_DISTINCTIVE_INFO"));
+        assert!(!back_cell_b.text().contains("a`b|c"));
+
+        let doc = import(&exported_md);
+        let re_exported = export(&doc);
+        assert!(re_exported.contains("``a`b\\|c``"), "Re-exported: {re_exported}");
+        assert!(re_exported.contains("CRITICAL\\_DISTINCTIVE\\_INFO"), "Re-exported: {re_exported}");
+        let doc2 = import(&re_exported);
+        let back_flow2 = model::from_doc(&doc2);
+        let FBlock::Table(back_table2) = &back_flow2.blocks[0] else { panic!() };
+        assert_eq!(back_table2.rows[1][0].text(), "a`b|c");
+        assert_eq!(back_table2.rows[1][1].text(), "CRITICAL_DISTINCTIVE_INFO");
     }
 }

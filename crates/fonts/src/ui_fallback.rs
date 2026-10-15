@@ -65,6 +65,10 @@ const MAX_FACES: u32 = 64;
 const MAX_ASSETS: usize = 8192;
 /// Characters a face's coverage is measured on.
 const MAX_NEEDED: usize = 4096;
+/// The tables skrifa reads glyph outlines from: TrueType, CFF, CFF2 and VARC. A face with
+/// outlines only in Apple's `hvgl` table has none of them, and the interface draws its characters
+/// as blank space.
+const OUTLINE_TABLES: [&[u8; 4]; 4] = [b"glyf", b"CFF ", b"CFF2", b"VARC"];
 
 /// A character only a font for the language has: a simplified-only hanzi, or kana.
 fn probe(hans: bool) -> char {
@@ -199,8 +203,9 @@ pub(crate) fn find_ui_font(dirs: &[std::path::PathBuf], names: &[&str], needed: 
 
 /// The face of a font file (or collection) to use and how many of `needed` it maps: the one
 /// mapping the most, then preferring a Regular style and, for Chinese, a Simplified Chinese
-/// family (`… SC`, `… GB`, as in a pan-CJK collection). `None` if the header isn't a font's or
-/// no face maps any of `needed`.
+/// family (`… SC`, `… GB`, as in a pan-CJK collection). Faces with none of the
+/// [`OUTLINE_TABLES`] are skipped. `None` if the header isn't a font's or no face with outlines
+/// maps any of `needed`.
 pub(crate) fn pick_face(data: &[u8], needed: &[char], hans: bool) -> Option<(u32, String, usize)> {
     let magic = data.get(..4)?;
     if ![&[0, 1, 0, 0][..], b"OTTO", b"ttcf"].contains(&magic) {
@@ -213,6 +218,9 @@ pub(crate) fn pick_face(data: &[u8], needed: &[char], hans: bool) -> Option<(u32
     let mut best: Option<((usize, bool, bool), u32, String)> = None;
     for i in 0..count {
         let Ok(f) = skrifa::FontRef::from_index(data, i) else { continue };
+        if !OUTLINE_TABLES.iter().any(|t| f.table_data(skrifa::Tag::new(t)).is_some()) {
+            continue;
+        }
         let charmap = f.charmap();
         let covered = needed.iter().filter(|c| charmap.map(**c).is_some()).count();
         if covered == 0 {
@@ -285,6 +293,30 @@ mod tests {
         // The bundled Latin face has no Arabic letters, so it is never taken for an Arabic interface.
         assert!(find_ui_font(std::slice::from_ref(&dir), &names, &['ع'], false).is_none());
         assert!(!arabic_candidates().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn skips_faces_without_outlines() {
+        // Renaming the `glyf` table to `hvgl` gives a face like those of `PingFangUI.ttc` on
+        // macOS 27.0.1. Its cmap maps characters, and skrifa reads no outlines from it.
+        let sans = crate::bundled()[0];
+        let mut hvgl = sans.to_vec();
+        let tables = u16::from_be_bytes([hvgl[4], hvgl[5]]) as usize;
+        let glyf = (0..tables).map(|r| 12 + r * 16).find(|&at| &hvgl[at..at + 4] == b"glyf").unwrap();
+        hvgl[glyf..glyf + 4].copy_from_slice(b"hvgl");
+        assert!(skrifa::FontRef::new(&hvgl).unwrap().charmap().map('A').is_some());
+        assert!(pick_face(&hvgl, &['A'], true).is_none());
+        assert_eq!(pick_face(sans, &['A'], true), Some((0, "Source Sans 3".to_string(), 1)));
+        // `find_ui_font` uses the next file, and returns `None` when no other file is listed.
+        let dir = std::env::temp_dir().join(format!("wc-uifallback-outlines-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("hvgl.ttf"), &hvgl).unwrap();
+        std::fs::write(dir.join("glyf.ttf"), sans).unwrap();
+        let found = find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf", "glyf.ttf"], &['A'], true).unwrap();
+        assert!(found.bytes == sans);
+        assert!(find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf"], &['A'], true).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

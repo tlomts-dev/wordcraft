@@ -4,6 +4,7 @@
 //! - `engine.execute {command, params}`: run any command (engine or `ui.*`)
 //! - `engine.commands {search?}`: engine and app print commands with enablement and parameters
 //! - `document.inspect`: document structure; `ui.inspect`: UI state, canvas geometry, perf
+//! - `ui.wheel {x, y, dx?, dy, unit?, phase?}`: a mouse-wheel / trackpad scroll at a window point.
 //! - `ui.click {x, y, button?, count?, shift?, cmd?}`, `ui.move {x, y}`, `ui.drag {x, y, toX, toY}`:
 //!   real pointer input in screen points (reaches every widget)
 //! - `ui.clickText {page, x, y}`: click at a page position (points from the page's top-left)
@@ -104,6 +105,17 @@ fn click_events(app: &mut WordApp, pos: egui::Pos2, button: egui::PointerButton,
     }
 }
 
+/// Programmatic calls never open the Save prompt, so closing unsaved work must be explicit:
+/// save first, or pass `"force": true` (only a real boolean true counts) to discard it (#1268).
+fn close_refused(app: &WordApp, id: &str, params: &Value) -> Option<&'static str> {
+    let force = params.get("force").and_then(Value::as_bool) == Some(true);
+    (id == "file.close" && app.session.dirty && !force)
+        .then_some("the document has unsaved changes: save it first, or pass {\"force\": true} to discard them and close")
+}
+
+/// The reply to a request that needs a document while none is open (#1129).
+const NO_DOCUMENT: &str = "no document is open; create one (file.new) or open one (file.open) first";
+
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let s = |k: &str| p.get(k).and_then(Value::as_str);
@@ -112,6 +124,9 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
         "engine.execute" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            if let Some(e) = close_refused(app, id, &params) {
+                return err(e);
+            }
             match app.execute(id, params) {
                 Ok(v) => ok(v),
                 Err(e) => err(e),
@@ -133,6 +148,8 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             }
             ok(Value::Array(commands))
         }
+        // The Start screen's empty window has no document to inspect or render (#1129).
+        "document.inspect" | "ui.render" if !app.has_document() => err(NO_DOCUMENT),
         "document.inspect" => match app.session.run("document.inspect", p) {
             Ok(v) => ok(v),
             Err(e) => err(e),
@@ -204,6 +221,25 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             app.synthetic.push(egui::Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
             ok(json!({"queued": true}))
         }
+        "ui.wheel" => {
+            // Mouse-wheel or trackpad scroll at (x, y): `dy` points (positive scrolls up), or
+            // lines with `"unit": "line"`; `phase` "start"/"move"/"end" for a trackpad gesture.
+            let (Some(x), Some(y)) = (f("x"), f("y")) else { return err("missing x/y") };
+            let unit = match s("unit") {
+                Some("line") => egui::MouseWheelUnit::Line,
+                Some("page") => egui::MouseWheelUnit::Page,
+                _ => egui::MouseWheelUnit::Point,
+            };
+            let phase = match s("phase") {
+                Some("start") => egui::TouchPhase::Start,
+                Some("end") => egui::TouchPhase::End,
+                _ => egui::TouchPhase::Move,
+            };
+            let delta = egui::vec2(f("dx").unwrap_or(0.0), f("dy").unwrap_or(0.0));
+            app.synthetic.push(egui::Event::PointerMoved(egui::pos2(x, y)));
+            app.synthetic.push(egui::Event::MouseWheel { unit, delta, phase, modifiers: mods(p) });
+            ok(json!({"queued": true}))
+        }
         "ui.text" => {
             let Some(t) = s("text") else { return err("missing text") };
             app.synthetic.push(egui::Event::Text(t.to_string()));
@@ -242,6 +278,9 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
         }
         other => {
             // Anything else: a command id.
+            if let Some(e) = close_refused(app, other, p) {
+                return err(e);
+            }
             match app.execute(other, p.clone()) {
                 Ok(v) => ok(v),
                 Err(e) => err(e),

@@ -106,11 +106,13 @@ pub fn combo(m: Modifiers, key: &str, with_shift: bool) -> String {
 
 /// Shortcuts for interface commands (`ui.*`), which aren't in the engine's keymap: Alt+Q moves
 /// to "Tell me" command search, as in Word for Windows (#819). Not on macOS, where Option+Q types
-/// a character.
+/// a character. On macOS ⌘⌥R collapses or expands the ribbon, as in Word for Mac.
 fn ui_shortcut(key: Key, m: Modifiers) -> Option<(&'static str, Value)> {
     let alt_only = m.alt && !m.command && !m.ctrl && !m.mac_cmd && !m.shift;
+    let mac_cmd_alt = cfg!(target_os = "macos") && m.mac_cmd && m.alt && !m.ctrl && !m.shift;
     match key {
         Key::Q if alt_only && !cfg!(target_os = "macos") => Some(("ui.dialog", json!({"name": "commands"}))),
+        Key::R if mac_cmd_alt => Some(("ui.collapseRibbon", json!({}))),
         _ => None,
     }
 }
@@ -148,6 +150,13 @@ fn shift_variant_params(id: &str) -> Option<Value> {
     } else {
         None
     }
+}
+
+/// Shift+Delete, which cuts the selection and does nothing without one, as in Word for Windows
+/// (#1669). On Windows the windowing layer already sends it as a Cut; elsewhere it arrives as the
+/// key, and no shortcut was bound to it.
+fn is_shift_delete(key: Key, m: Modifiers) -> bool {
+    key == Key::Delete && m.shift && !m.command && !m.ctrl && !m.alt && !m.mac_cmd
 }
 
 /// Shift+F10 opens the context menu, as the Menu key does (#821). (The Menu key itself doesn't
@@ -229,12 +238,28 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         }
         return;
     }
+    let alt_codes = alt_codes_supported(ctx);
     for e in events {
         // An Alt shortcut (Alt+Shift+D, Alt+F7…) may also send its key's text; it isn't typed.
         match &e {
-            egui::Event::Key { pressed: true, .. } => app.canvas.swallow_text = false,
+            egui::Event::Key { pressed: true, .. } => {
+                app.canvas.swallow_text = false;
+                app.canvas.alt_code_echo = None;
+            }
             egui::Event::Text(_) if std::mem::take(&mut app.canvas.swallow_text) => continue,
+            egui::Event::Text(t) => {
+                if let Some(echo) = app.canvas.alt_code_echo.take()
+                    && alt_code_echoed(app, &echo, t)
+                {
+                    continue;
+                }
+            }
+            // Focus elsewhere (another window) ends an Alt code unfinished.
+            egui::Event::WindowFocused(false) => app.canvas.alt_code.clear(),
             _ => {}
+        }
+        if alt_codes && app.session.math.is_none() && alt_code_event(app, &e) {
+            continue;
         }
         if let egui::Event::Paste(t) = &e {
             app.canvas.pasted = true;
@@ -315,12 +340,8 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             }
             egui::Event::Copy | egui::Event::Cut => {
                 let id = if matches!(e, egui::Event::Cut) { "edit.cut" } else { "edit.copy" };
-                if let Ok(r) = app.run(id, json!({}))
-                    && let Some(t) = r.get("text").and_then(Value::as_str)
-                    && !t.is_empty()
-                {
-                    ctx.copy_text(t.to_string());
-                }
+                // `run` puts the copied text on the system clipboard itself.
+                let _ = app.run(id, json!({}));
             }
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 if key == Key::Escape && app.session.painter.is_some() {
@@ -355,18 +376,31 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     app.canvas.context_menu_from_keys = true;
                     continue;
                 }
-                // Escape leaves a text box to just after it in the body.
+                // Escape in a text box (or WordArt) selects the box itself, so Delete then removes
+                // it (#1538). The anchor position is just after the box's object character.
                 if key == Key::Escape
                     && crate::canvas::in_text_box(app)
-                    && app.session.sel.is_collapsed()
                     && let wordcraft_doc::StoryRef::Part(id) = app.session.sel.focus.story
-                    && let Some(pos) = app.session.doc.text_box_anchor(id)
+                    && let Some(end) = app.session.doc.text_box_anchor(id)
+                    && let Some(off) = end.off.checked_sub(wordcraft_doc::para::OBJ.len_utf8())
                 {
-                    let _ = app.run("caret.set", json!({"pos": pos}));
+                    let start = wordcraft_doc::Pos { off, ..end.clone() };
+                    let _ = app.run("select.range", json!({"anchor": start, "focus": end}));
                     continue;
                 }
                 if key == Key::Escape && matches!(app.session.sel.focus.story, wordcraft_doc::StoryRef::Part(_)) && app.session.sel.is_collapsed() {
                     let _ = app.run("insert.closeHeader", json!({}));
+                    continue;
+                }
+                if is_shift_delete(key, modifiers) {
+                    if !app.session.sel.is_collapsed()
+                        && let Ok(r) = app.run("edit.cut", json!({}))
+                    {
+                        crate::system_clipboard::put_result(app, ctx, &r);
+                    }
+                    continue;
+                }
+                if leave_full_screen(app, key, modifiers, true) {
                     continue;
                 }
                 app.canvas.swallow_text = dispatch(app, key, modifiers) && modifiers.alt;
@@ -374,6 +408,156 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             _ => {}
         }
     }
+}
+
+/// Escape leaves full screen (#980) once nothing nearer took it: a pen, a text box, a header, a
+/// dialog, a menu or a popup, a drag on the page, and in the document (`canvas`) a selection,
+/// which Escape collapses first (`select.collapse`), as in a normal window.
+fn leave_full_screen(app: &mut WordApp, key: Key, m: Modifiers, canvas: bool) -> bool {
+    if key != Key::Escape || !m.is_none() || !app.session.view.full_screen || !app.escape_free {
+        return false;
+    }
+    let c = &app.canvas;
+    if c.obj_drag.is_some() || c.table_resize.is_some() || c.table_drag.is_some() || c.link_from.is_some() {
+        return false;
+    }
+    if canvas && !app.session.sel.is_collapsed() {
+        return false;
+    }
+    let _ = app.run("view.fullScreen", json!({"value": false}));
+    true
+}
+
+/// Alt+numpad character codes are a Windows convention; on macOS Option+digit types its own
+/// characters (¡ ™ £…), so they're off there (also in a browser on a Mac).
+fn alt_codes_supported(ctx: &egui::Context) -> bool {
+    !cfg!(target_os = "macos") && ctx.os() != egui::os::OperatingSystem::Mac
+}
+
+/// The digit a key types for an Alt code.
+///
+/// Word counts only numeric-keypad digits. egui 0.36 reports keypad and top-row digits alike
+/// (`Key::Num0`…`Num9`, with the same `physical_key`), and eframe passes no winit key location
+/// on, so the top-row digits compose codes too (they type nothing else with Alt alone; Ctrl+Alt+1
+/// and keytip digits are untouched).
+fn alt_code_digit(key: Key) -> Option<char> {
+    let n = match key {
+        Key::Num0 => 0,
+        Key::Num1 => 1,
+        Key::Num2 => 2,
+        Key::Num3 => 3,
+        Key::Num4 => 4,
+        Key::Num5 => 5,
+        Key::Num6 => 6,
+        Key::Num7 => 7,
+        Key::Num8 => 8,
+        Key::Num9 => 9,
+        _ => return None,
+    };
+    char::from_digit(n, 10)
+}
+
+/// Alt+numpad entry (#961): digits typed with Alt alone held collect; releasing Alt types the
+/// character their code names (`text.typeCode`: 0233 → é, 233 → Θ in code page 437). Returns
+/// whether the event was part of it (and isn't handled otherwise).
+fn alt_code_event(app: &mut WordApp, e: &egui::Event) -> bool {
+    let alt_only = |m: &Modifiers| m.alt && !m.ctrl && !m.shift && !m.command && !m.mac_cmd;
+    match e {
+        egui::Event::Key { key, pressed: true, repeat, modifiers, .. } if alt_only(modifiers) => match alt_code_digit(*key) {
+            // A held digit's auto-repeat adds nothing (as on Windows).
+            Some(_) if *repeat => {
+                app.canvas.swallow_text = true;
+                true
+            }
+            Some(d) => {
+                // Codes beyond seven digits name nothing; stop collecting rather than grow.
+                if app.canvas.alt_code.len() < 8 {
+                    app.canvas.alt_code.push(d);
+                }
+                // The digit's text (Linux sends it even with Alt held) isn't typed.
+                app.canvas.swallow_text = true;
+                true
+            }
+            None => {
+                app.canvas.alt_code.clear();
+                false
+            }
+        },
+        egui::Event::Key { key: Key::AltLeft | Key::AltRight, pressed: false, .. } => {
+            finish_alt_code(app);
+            false
+        }
+        egui::Event::ModifiersChanged(m) if !m.alt => {
+            finish_alt_code(app);
+            false
+        }
+        egui::Event::Key { pressed: true, .. } => {
+            // Another key with Ctrl/Shift held (or without Alt) ends the entry unfinished.
+            app.canvas.alt_code.clear();
+            false
+        }
+        _ => false,
+    }
+}
+
+/// What an Alt code typed, for the platform's own composed character that may follow.
+#[derive(Clone, Debug)]
+pub(crate) struct AltCodeEcho {
+    /// The character typed.
+    typed: String,
+    /// The system composes Alt codes itself (Windows): whatever it sends is the code's character.
+    system_composes: bool,
+    /// The code named a byte of the system's code pages (1–255), so the system's character wins
+    /// over ours: it knows the code pages (DBCS ones too) better than our locale guess.
+    byte_code: bool,
+}
+
+/// Alt released: type the collected code's character, if any.
+fn finish_alt_code(app: &mut WordApp) {
+    let code = std::mem::take(&mut app.canvas.alt_code);
+    if code.is_empty() {
+        return;
+    }
+    crate::objects::enter_text_box(app);
+    let system_composes = cfg!(target_os = "windows");
+    let mut params = json!({"code": code});
+    if system_composes {
+        // Windows: the code pages of the system locale (Polish 1250/852, Russian 1251/866…).
+        let (ansi, oem) = wordcraft_engine::cmd::text::system_code_pages();
+        params = json!({"code": code, "ansi": ansi, "oem": oem});
+        // The system's composed character comes as text after the digits' swallowed text.
+        app.canvas.swallow_text = false;
+    }
+    if let Ok(r) = app.run("text.typeCode", params) {
+        let byte_code = code.trim_start_matches('0').parse::<u32>().is_ok_and(|v| v <= 255);
+        app.canvas.alt_code_echo = r.get("char").and_then(Value::as_str).map(|c| AltCodeEcho { typed: c.to_string(), system_composes, byte_code });
+    }
+}
+
+/// Text arriving right after an Alt code typed `echo` (no key pressed between): whether it was
+/// the platform's composed character and is handled. The same character isn't typed twice. On
+/// Windows the text is always the composed character: for a code up to 255 it replaces ours (the
+/// system knows its code pages), above 255 ours stays (Windows reduces it to a byte; Word types
+/// the Unicode character).
+fn alt_code_echoed(app: &mut WordApp, echo: &AltCodeEcho, text: &str) -> bool {
+    if echo.typed == text {
+        return true;
+    }
+    if !echo.system_composes {
+        return false;
+    }
+    if echo.byte_code && text.chars().count() == 1 {
+        let s = &app.session;
+        let f = s.sel.focus.clone();
+        let start = f.off.checked_sub(echo.typed.len());
+        let ours =
+            start.filter(|_| s.sel.is_collapsed()).filter(|st| s.doc.para_at(&f).and_then(|p| p.text.get(*st..f.off)) == Some(echo.typed.as_str()));
+        if let Some(start) = ours {
+            app.session.sel = wordcraft_engine::Selection { anchor: wordcraft_doc::Pos { off: start, ..f.clone() }, focus: f };
+            let _ = app.run("text.insert", json!({"text": text}));
+        }
+    }
+    true
 }
 
 /// Whether a key runs its shortcut with the canvas unfocused (after a ribbon click, say): Mod and
@@ -390,10 +574,13 @@ pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
     }
     let events = ctx.input(|i| i.events.clone());
     for e in events {
-        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e
-            && is_global_shortcut(key, modifiers)
-        {
-            dispatch(app, key, modifiers);
+        if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
+            if leave_full_screen(app, key, modifiers, false) {
+                continue;
+            }
+            if is_global_shortcut(key, modifiers) {
+                dispatch(app, key, modifiers);
+            }
         }
     }
 }
@@ -425,6 +612,16 @@ mod tests {
     }
 
     #[test]
+    fn cmd_option_r_collapses_the_ribbon_on_macos() {
+        let m = |mac_cmd, alt, shift| egui::Modifiers { mac_cmd, command: mac_cmd, alt, shift, ..Default::default() };
+        let collapse = Some(("ui.collapseRibbon", json!({})));
+        assert_eq!(ui_shortcut(Key::R, m(true, true, false)), if cfg!(target_os = "macos") { collapse } else { None });
+        assert_eq!(ui_shortcut(Key::R, m(true, false, false)), None, "Mod+R aligns right");
+        assert_eq!(ui_shortcut(Key::R, m(false, true, false)), None, "Option+R types a character");
+        assert_eq!(ui_shortcut(Key::R, m(true, true, true)), None, "Mod+Alt+Shift+R");
+    }
+
+    #[test]
     fn only_plain_paste_releases_paste_a_clipboard_picture() {
         let m = |command, shift, alt| egui::Modifiers { command, shift, alt, ..Default::default() };
         assert!(is_paste_release(Key::V, m(true, false, false)), "Mod+V");
@@ -434,6 +631,16 @@ mod tests {
         assert!(!is_paste_release(Key::V, m(false, false, false)), "a plain V");
         assert!(is_paste_special_release(Key::V, m(true, false, true)), "Mod+Alt+V opens Paste Special");
         assert!(!is_paste_special_release(Key::V, m(true, true, true)) && !is_paste_special_release(Key::V, m(true, false, false)));
+    }
+
+    #[test]
+    fn shift_delete_is_only_shift_and_delete() {
+        let m = |shift, ctrl, alt| egui::Modifiers { shift, ctrl, command: ctrl, alt, ..Default::default() };
+        assert!(is_shift_delete(Key::Delete, m(true, false, false)));
+        assert!(!is_shift_delete(Key::Delete, m(false, false, false)), "Delete alone erases");
+        assert!(!is_shift_delete(Key::Delete, m(true, true, false)), "Ctrl+Shift+Delete");
+        assert!(!is_shift_delete(Key::Delete, m(true, false, true)), "Alt+Shift+Delete");
+        assert!(!is_shift_delete(Key::Backspace, m(true, false, false)), "Shift+Backspace erases (#707)");
     }
 
     #[test]
@@ -454,5 +661,117 @@ mod tests {
         assert!(is_global_shortcut(Key::F7, m(false, false, false)), "F7");
         assert!(!is_global_shortcut(Key::Q, m(false, false, false)), "a plain letter is typing");
         assert!(!is_global_shortcut(Key::Q, m(false, false, true)), "Shift+letter is typing");
+    }
+
+    /// Alt held, keypad 0 2 3 3, Alt released: é is typed, the digits aren't, and keytips stay
+    /// off (#961). Linux sends each digit's text too; Windows may send the composed character.
+    #[test]
+    fn alt_numpad_code_types_its_character_without_keytips() {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        let doc_text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let ctx = egui::Context::default();
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let alt = Modifiers { alt: true, ..Default::default() };
+        let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+        let frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                crate::keytips::logic(a, ui.ctx());
+                canvas_events(a, ui.ctx());
+            })
+            .drop_without_applying_deltas();
+        };
+        frame(&mut a, vec![egui::Event::ModifiersChanged(alt), key(Key::AltLeft, true, alt)]);
+        for (k, t) in [(Key::Num0, "0"), (Key::Num2, "2"), (Key::Num3, "3"), (Key::Num3, "3")] {
+            frame(&mut a, vec![key(k, true, alt), egui::Event::Text(t.into()), key(k, false, alt)]);
+        }
+        assert_eq!(doc_text(&a).trim_end(), "", "nothing typed while Alt is held");
+        frame(&mut a, vec![key(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
+        assert_eq!(doc_text(&a).trim_end(), "é");
+        assert_eq!(a.ui.keytips, crate::keytips::Phase::Off, "an Alt code doesn't open keytips");
+        // The platform's own composed character isn't typed twice; the next typing is.
+        frame(&mut a, vec![egui::Event::Text("é".into())]);
+        frame(&mut a, vec![key(Key::E, true, Modifiers::NONE), egui::Event::Text("é".into())]);
+        assert_eq!(doc_text(&a).trim_end(), "éé");
+        // Without the leading zero: the system locale's OEM code page (233 is Θ in 437, Ú in 850).
+        frame(&mut a, vec![egui::Event::ModifiersChanged(alt), key(Key::AltLeft, true, alt)]);
+        for k in [Key::Num2, Key::Num3, Key::Num3] {
+            frame(&mut a, vec![key(k, true, alt), key(k, false, alt)]);
+        }
+        frame(&mut a, vec![key(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
+        let pages = wordcraft_engine::cmd::text::system_code_pages();
+        let oem = wordcraft_engine::cmd::text::alt_code_char(
+            "233",
+            1252,
+            if cfg!(target_os = "windows") { pages.1 } else { wordcraft_engine::cmd::text::system_oem_code_page() },
+        );
+        assert_eq!(doc_text(&a).trim_end(), format!("éé{}", oem.unwrap_or('?')));
+        // A bare Alt tap still opens keytips.
+        frame(&mut a, vec![egui::Event::ModifiersChanged(alt), key(Key::AltLeft, true, alt)]);
+        frame(&mut a, vec![key(Key::AltLeft, false, alt), egui::Event::ModifiersChanged(Modifiers::NONE)]);
+        assert_eq!(a.ui.keytips, crate::keytips::Phase::Tabs);
+    }
+
+    fn alt_frame_app() -> (egui::Context, WordApp) {
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        (egui::Context::default(), a)
+    }
+
+    fn alt_frame(ctx: &egui::Context, a: &mut WordApp, events: Vec<egui::Event>) {
+        ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| canvas_events(a, ui.ctx())).drop_without_applying_deltas();
+    }
+
+    fn alt_key(key: Key, pressed: bool, repeat: bool) -> egui::Event {
+        egui::Event::Key { key, physical_key: Some(key), pressed, repeat, modifiers: Modifiers { alt: true, ..Default::default() } }
+    }
+
+    /// Holding a digit with Alt adds it once: its auto-repeat presses don't (#961).
+    #[test]
+    fn alt_code_ignores_auto_repeat() {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        let (ctx, mut a) = alt_frame_app();
+        alt_frame(&ctx, &mut a, vec![alt_key(Key::Num6, true, false), alt_key(Key::Num6, true, true), alt_key(Key::Num6, true, true)]);
+        alt_frame(&ctx, &mut a, vec![alt_key(Key::Num5, true, false)]);
+        assert_eq!(a.canvas.alt_code, "65");
+        alt_frame(&ctx, &mut a, vec![egui::Event::ModifiersChanged(Modifiers::NONE)]);
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "A");
+    }
+
+    /// Switching to another window mid-code drops the digits: releasing Alt later types nothing.
+    #[test]
+    fn alt_code_is_dropped_when_the_window_loses_focus() {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        let (ctx, mut a) = alt_frame_app();
+        alt_frame(&ctx, &mut a, vec![alt_key(Key::Num6, true, false), alt_key(Key::Num5, true, false)]);
+        alt_frame(&ctx, &mut a, vec![egui::Event::WindowFocused(false)]);
+        assert_eq!(a.canvas.alt_code, "");
+        alt_frame(&ctx, &mut a, vec![egui::Event::WindowFocused(true), egui::Event::ModifiersChanged(Modifiers::NONE)]);
+        assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "");
+    }
+
+    /// Windows composes Alt codes with the system's code pages: for a code up to 255 its
+    /// character replaces ours (Polish Alt+0185 is ą, not ¹); above 255 Windows reduces the code
+    /// to a byte, so ours stays and its text isn't typed (#961).
+    #[test]
+    fn system_composed_alt_code_character_wins_up_to_255() {
+        let (ctx, mut a) = alt_frame_app();
+        let text = |a: &WordApp| a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end().to_string();
+        let _ = a.run("text.typeCode", json!({"code": "0185", "ansi": 1252}));
+        a.canvas.alt_code_echo = Some(AltCodeEcho { typed: "¹".into(), system_composes: true, byte_code: true });
+        alt_frame(&ctx, &mut a, vec![egui::Event::Text("ą".into())]);
+        assert_eq!(text(&a), "ą");
+        let _ = a.run("text.typeCode", json!({"code": "8364"}));
+        a.canvas.alt_code_echo = Some(AltCodeEcho { typed: "€".into(), system_composes: true, byte_code: false });
+        alt_frame(&ctx, &mut a, vec![egui::Event::Text("|".into())]);
+        assert_eq!(text(&a), "ą€");
+        // Elsewhere a different text after the code is ordinary typing.
+        a.canvas.alt_code_echo = Some(AltCodeEcho { typed: "€".into(), system_composes: false, byte_code: false });
+        alt_frame(&ctx, &mut a, vec![egui::Event::Text("x".into())]);
+        assert_eq!(text(&a), "ą€x");
     }
 }

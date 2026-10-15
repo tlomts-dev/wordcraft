@@ -275,7 +275,10 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
                 if let Some(x) = v.get_mut(i) {
                     *x = c;
                 }
-                col.offer(&s(&v), COST_MISTYPE);
+                // Final devoicing can make a voiced consonant sound voiceless.
+                let final_devoicing = i == n - 1 && matches!((chars[i], c), ('p', 'b') | ('t', 'd') | ('k', 'g'));
+                let cost = if final_devoicing { COST_ADD_DIACRITIC - 1 } else { COST_MISTYPE };
+                col.offer(&s(&v), cost);
             }
         }
     }
@@ -387,6 +390,13 @@ mod tests {
         has("konstytucija", "konstytucja");
         has("wziąść", "wziąć");
         has("dziewczyan", "dziewczyna");
+    }
+
+    #[test]
+    fn voiced_consonant_suggestion_ranks_first() {
+        crate::pl::test_dict::install();
+        let result = suggest("chlep", 6);
+        assert_eq!(result.first().map(String::as_str), Some("chleb"), "{result:?}");
     }
 
     #[test]

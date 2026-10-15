@@ -84,6 +84,9 @@
 	Book Title	Kitap Başlığı
 	Bookmark	Yer İşareti
 	Bookmark name:	Yer işareti adı:
+	Delete Bookmark	Yer İşaretini Sil
+	Hidden bookmarks	Gizli yer işaretleri
+	Sort by:	Sıralama ölçütü:
 	Border Painter	Kenarlık Fırçası
 	Border\nPainter	Kenarlık\nFırçası
 	Borders	Kenarlıklar
@@ -189,6 +192,7 @@
 	Delete Style	Stili Sil
 	Delete Table	Tabloyu Sil
 	Design	Tasarım
+	No document is open. Create a document or open one first.	Açık belge yok. Önce bir belge oluşturun veya açın.
 	development build	geliştirme derlemesi
 	Diagonal	Çapraz
 	Diamond	Eşkenar Dörtgen
@@ -325,6 +329,7 @@
 	Immersive	Odaklı
 	Immersive Reader	Odaklı Okuyucu
 	Immersive\nReader	Odaklı\nOkuyucu
+	In the margin	Kenarda
 	Increase Font Size	Yazı Tipi Boyutunu Büyüt
 	Increase Indent	Girintiyi Artır
 	Indent	Girinti
@@ -380,6 +385,8 @@
 	Labels	Etiketler
 	Landscape	Yatay
 	Language	Dil
+	{language} (no dictionary)	{language} (sözlük yok)
+	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	{language} için yüklü bir yazım sözlüğü yok, bu yüzden denetlenmiyor. WordCraft, {name} Hunspell sözlüğünü WORDCRAFT_DICTIONARIES klasöründe ve olağan sistem konumlarında arar.
 	Lasso	Kement
 	Last Column	Son Sütun
 	Last commit	Son commit
@@ -481,6 +488,7 @@
 	OK	Tamam
 	One	Bir
 	One Page	Bir Sayfa
+	Only for the selected text	Yalnızca seçili metin için
 	Open	Aç
 	OpenDocument Text (*.odt)	OpenDocument Metni (*.odt)
 	Optional Hyphen	İsteğe Bağlı Kısa Çizgi
@@ -1149,15 +1157,6 @@ preview	Title	Örnek
 	Gallery	Galeri
 	Sketchbook	Eskiz Defteri
 	Studio	Stüdyo
-	Letter   8.50" × 11.00"	Letter   8,50" × 11,00"
-	Legal   8.50" × 14.00"	Legal   8,50" × 14,00"
-	Executive   7.25" × 10.50"	Executive   7,25" × 10,50"
-	Statement   5.50" × 8.50"	Statement   5,50" × 8,50"
-	Tabloid   11.00" × 17.00"	Tabloid   11,00" × 17,00"
-	B4 (JIS)   10.12" × 14.33"	B4 (JIS)   10,12" × 14,33"
-	B5 (JIS)   7.17" × 10.12"	B5 (JIS)   7,17" × 10,12"
-	Envelope #10   4.12" × 9.50"	Zarf No. 10   4,12" × 9,50"
-	Envelope DL   4.33" × 8.66"	Zarf DL   4,33" × 8,66"
 	Plain Table 1	Düz Tablo 1
 	Grid Table 1 Light	Kılavuz Tablo 1 Açık
 	Grid Table 4 – Blue	Kılavuz Tablo 4 – Mavi
@@ -1719,7 +1718,8 @@ preview	Title	Örnek
 	✓ None	✓ Yok
 	Formatted	Biçimlendirildi
 	Interface size:	Arabirim boyutu:
-	Makes the ribbon, menus and dialogs larger or smaller, on top of your system's display scaling. Document zoom is separate.	Şeridi, menüleri ve iletişim kutularını sisteminizin ekran ölçeklendirmesine ek olarak büyütür veya küçültür. Belge yakınlaştırması ayrıdır.
+	Auto ({percent}%)	Otomatik (%{percent})
+	Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate.	Şeridi, menüleri ve iletişim kutularını büyütür veya küçültür. Otomatik, sisteminizin ekran ölçeklendirmesini izler; %100, nokta başına bir ekran pikselidir. Belge yakınlaştırması ayrıdır.
 	Deleted	Silindi
 	Copyright Sign	Telif Hakkı İşareti
 	Demote	Düzey Düşür
@@ -1744,6 +1744,7 @@ preview	Title	Örnek
 	Selected Fields	Seçili Alanlar
 	Toggle Field Codes	Alan Kodlarını Aç/Kapat
 	Toggle Unicode Character	Unicode Karakterini Değiştir
+	Type Character Code	Karakter Kodu Yaz
 	Trademark Sign	Ticari Marka İşareti
 	Unlink Fields	Alan Bağlantılarını Kaldır
 	Unlock Fields	Alanların Kilidini Aç
@@ -2201,6 +2202,7 @@ preview	Title	Örnek
 	Print to PDF	PDF'ye yazdır
 # Word XML Document (#548).
 	Word XML Document (*.xml)	Word XML Belgesi (*.xml)
+	Word 2003 XML Document (*.xml)	Word 2003 XML Belgesi (*.xml)
 # Find and Replace special characters and wildcards (#543).
 	Use wildcards	Joker karakter kullan
 	Special	Özel
@@ -2371,6 +2373,7 @@ preview	Title	Örnek
 	Hyphenation Options…	Heceleme Seçenekleri…
 	Hyphenation zone:	Heceleme bölgesi:
 	Italian	İtalyanca
+	Croatian	Hırvatça
 	Japanese	Japonca
 	Korean	Korece
 	Limit consecutive hyphens to:	Ardışık tireleri şununla sınırla:
@@ -2426,6 +2429,8 @@ preview	Title	Örnek
 	No words yet. Add to Dictionary on a misspelled word puts it here.	Henüz sözcük yok. Yanlış yazılmış bir sözcükte «Sözlüğe ekle» onu buraya koyar.
 	Overtype	Üzerine yaz
 	Overtype (typing replaces the characters after the caret)	Üzerine yazma (yazılan metin imleçten sonraki karakterlerin yerine geçer)
+	Show alignment guides when moving pictures and shapes	Resimleri ve şekilleri taşırken hizalama kılavuzlarını göster
+	Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely.	Taşınan nesneler sayfanın kenarlarına ve ortasına, kenar boşluklarına ve diğer nesnelere tutunur. Serbestçe taşımak için Alt tuşunu basılı tutun.
 	Page display	Sayfa görünümü
 	Paragraph marks	Paragraf işaretleri
 	Personalize	Kişiselleştir
@@ -2463,6 +2468,39 @@ preview	Title	Örnek
 	AutoFit Column by Double-Clicking	Sütunu Çift Tıklayarak Otomatik Sığdır
 	Region:	Bölge:
 	Automatic ({region})	Otomatik ({region})
+	Text of the nearest paragraph with a given style (running headers)	Belirli bir stile sahip en yakın paragrafın metni (değişken üstbilgiler)
+	Style name:	Stil adı:
+# Mail merge: filter and sort recipients (#778)
+	Filter Recipients	Alıcıları filtrele
+	Sort Recipients	Alıcıları sırala
+	Filter and Sort	Filtrele ve sırala
+	And	Ve
+	Or	Veya
+	Comparison	Karşılaştırma
+	Compare to	Karşılaştırılacak değer
+	Add Condition	Koşul ekle
+	Remove condition	Koşulu kaldır
+	Sort by	Sıralama ölçütü
+	Then by	Sonra
+	Ascending	Artan
+	Descending	Azalan
+	Equal to	Eşittir
+	Not equal to	Eşit değildir
+	Less than	Küçüktür
+	Greater than	Büyüktür
+	Less than or equal	Küçük veya eşittir
+	Greater than or equal	Büyük veya eşittir
+	Is blank	Boştur
+	Is not blank	Boş değildir
+	Contains	İçerir
+	Does not contain	İçermez
+	{count} of {total} recipients will be merged.	Birleştirilecek alıcılar: {count} / {total}.
+	Take the last match on the page	Sayfadaki son eşleşmeyi al
+	Show its list number	Liste numarasını göster
+	Show its number relative to this field	Numarasını bu alana göre göster
+	Show its number with all higher levels	Numarasını tüm üst düzeylerle göster
+	Number only, without the label's words	Yalnızca numara, etiketin sözcükleri olmadan
+	Add whether it is above or below	Yukarıda mı aşağıda mı olduğunu ekle
 	Start-up	Başlangıç
 	Show the Start screen when WordCraft starts	WordCraft açılırken Başlangıç ekranını göster
 	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	Açık: WordCraft, Dosya › Giriş sayfasında boş belge, şablonlar ve son belgelerinizle açılır. Kapalı: boş bir belge açar.
@@ -2473,3 +2511,95 @@ preview	Title	Örnek
 	Level 7	Düzey 7
 	Level 8	Düzey 8
 	Level 9	Düzey 9
+	Copy to	Şuraya kopyala
+
+# Document naming and account controls.
+	Rename Document	Belgeyi yeniden adlandır
+	Document name	Belge adı
+	Rename	Yeniden adlandır
+	Account	Hesap
+	Privacy Options	Gizlilik Seçenekleri
+	Trust Center	Güven Merkezi
+	Privacy for this document	Bu belgenin gizliliği
+	Remove my name from comments, changes and file properties when saving	Kaydederken adımı açıklamalardan, değişikliklerden ve dosya özelliklerinden kaldır
+	Leave out the date and time of comments and tracked changes when saving	Kaydederken açıklamaların ve izlenen değişikliklerin tarih ve saatini dahil etme
+	The document you are editing keeps the names and dates; only the saved file leaves them out.	Düzenlediğiniz belge adları ve tarihleri korur; yalnızca kaydedilen dosya bunları içermez.
+	Privacy Settings	Geçerli gizlilik ayarları
+	Waiting for the save to finish…	Kaydetme işleminin bitmesi bekleniyor…
+	Saving {name} was cancelled, so it is still open and nothing was lost.	{name} kaydetme işlemi iptal edildi; belge hâlâ açık ve hiçbir şey kaybolmadı.
+	Paper	Kağıt
+	Paper size:	Kağıt boyutu:
+	Custom size	Özel boyut
+	More Paper Sizes…	Diğer Kağıt Boyutları…
+	The margins don't fit on a page this size; make the margins smaller first.	Kenar boşlukları bu boyuttaki bir sayfaya sığmıyor; önce kenar boşluklarını küçültün.
+	Full Screen	Tam ekran
+	Full\nScreen	Tam\nekran
+	Use the browser's full screen (F11)	Tarayıcının tam ekran modunu kullanın (F11)
+
+# #1128: size labels (Mailings, Layout › Size), status-bar messages, Reading Mode and Go To
+	{name}   {height} × {width} in	{name}   {height} × {width} inç
+	{name}   {height} × {width} mm	{name}   {height} × {width} mm
+	{width} × {height} mm	{width} × {height} mm
+	{kind}, {columns} × {rows}, {size} ({paper})	{kind}, {columns} × {rows}, {size} ({paper})
+	Researcher needs an online service; WordCraft keeps your documents offline.	Araştırmacı çevrimiçi bir hizmet gerektirir; WordCraft belgelerinizi çevrimdışı tutar.
+	These settings will be used for new documents.	Bu ayarlar yeni belgeler için kullanılacak.
+	can't split at the first row	tablo ilk satırdan bölünemez
+	select two or more cells to merge	birleştirmek için iki veya daha fazla hücre seçin
+	there is no ink to replay	yeniden oynatılacak mürekkep yok
+	there's no citation after the caret	imlecin sonrasında atıf yok
+	this item is already at the top level	bu öğe zaten en üst düzeyde
+	Envelope #10	Zarf No. 10
+	Envelope DL	Zarf DL
+	Reading Mode	Okuma Modu
+	Column width	Sütun genişliği
+	Text size	Metin boyutu
+	Edit Document	Belgeyi Düzenle
+	Go to what:	Gidilecek yer:
+	Type +2 or -1 to move from the page you are on.	Bulunduğunuz sayfadan ilerlemek için +2, geri gitmek için -1 yazın.
+	Suggested	Önerilenler
+	Set Proofing Language…	Yazım denetimi dilini ayarla…
+	Language Preferences…	Dil tercihleri…
+	Printer	Yazıcı
+	Select a printer	Bir yazıcı seçin
+	Refresh printers	Yazıcıları yenile
+	Two-sided printing	Çift taraflı yazdırma
+	Printer default	Yazıcı varsayılanı
+	One-sided	Tek taraflı
+	Two-sided: long edge	Çift taraflı: uzun kenar
+	Two-sided: short edge	Çift taraflı: kısa kenar
+	Grayscale	Gri tonlama
+	Finding printers…	Yazıcılar aranıyor…
+	No printers found. Configure a system printer or export a PDF.	Yazıcı bulunamadı. Sistemde bir yazıcı yapılandırın veya PDF olarak dışa aktarın.
+	Printer discovery failed.	Yazıcı arama başarısız oldu.
+	Submitting print job…	Yazdırma işi gönderiliyor…
+	Print job submitted.	Yazdırma işi gönderildi.
+	Print job submitted: {receipt}	Yazdırma işi gönderildi: {receipt}
+	Print failed: the printing worker stopped.	Yazdırma başarısız oldu: yazdırma işlemi durdu.
+	Print settings	Yazdırma ayarları
+	Submit print job	Yazdırma işini gönder
+
+# Cross-reference dialog (#1003)
+	For which item:	Hangi öğe için:
+	Heading	Başlık
+	Heading text	Başlık metni
+	Insert reference to:	Başvuru ekle:
+	Reference type:	Başvuru türü:
+
+# Dictionaries folder (#1063)
+	Dictionaries	Sözlükler
+	Dictionaries folder:	Sözlük klasörü:
+	Not set: the system's usual places	Ayarlanmadı: sistemin olağan konumları
+	Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.	Bu klasördeki Hunspell .aff ve .dic dosyaları (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) sistemdekilerden önce kullanılır.
+	{language}: {file}	{language}: {file}
+	{language}: no dictionary found	{language}: sözlük bulunamadı
+
+# Backstage › Recover (#586)
+	Recover	Kurtar
+
+# Page Setup › Mirror margins (#1239)
+	Mirror margins	Yansıtılmış kenar boşlukları
+
+# Insert Hyperlink › Place in This Document (#1370)
+	Existing File or Web Page	Varolan Dosya veya Web Sayfası
+	Link to:	Bağlantı:
+	Place in This Document	Bu Belgede Bir Yer

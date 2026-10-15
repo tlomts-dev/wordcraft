@@ -233,6 +233,9 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
                 for (i, line) in t.split('\n').enumerate() {
                     if i > 0 {
                         last = exec(b, "text.newParagraph", json!({}));
+                        if last.is_err() {
+                            break;
+                        }
                     }
                     if !line.is_empty() {
                         last = exec(b, "text.insert", json!({"text": line, "raw": true}));

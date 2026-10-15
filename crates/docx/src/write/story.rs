@@ -2,7 +2,7 @@
 
 use wordcraft_doc::effects::ShapeEffects;
 use wordcraft_doc::para::{AltText, Anchor, Float, NoteKind, ShapeKind, Wrap};
-use wordcraft_doc::props::{CharProps, PropChange, Rgb};
+use wordcraft_doc::props::{CharProps, PropChange, Rgb, TextColor};
 use wordcraft_doc::section::{LineNumberRestart, NoteProps, SectionProps, SectionStart};
 use wordcraft_doc::table::Table;
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, RevisionKind};
@@ -74,7 +74,16 @@ impl Writer<'_> {
             self.move_ranges(w, &[]);
         }
         if bl.last().is_none_or(|b| matches!(**b, Block::Table(_))) {
-            w.raw("<w:p/>");
+            // A header with no paragraph of its own before: the watermark goes in this one.
+            if depth == 0
+                && let Some(run) = self.pending_watermark.take()
+            {
+                w.raw("<w:p>");
+                w.raw(&run);
+                w.raw("</w:p>");
+            } else {
+                w.raw("<w:p/>");
+            }
         }
     }
 
@@ -207,12 +216,18 @@ impl Writer<'_> {
             w.empty(mark, &[]);
             w.raw("</w:r>");
         }
+        // A header's watermark, in its first top-level paragraph (not a table cell or text box).
+        if depth == 0
+            && let Some(run) = self.pending_watermark.take()
+        {
+            w.raw(&run);
+        }
         // Taken before the content so a nested story (a text box in an entry) can't claim them.
         if std::mem::take(&mut self.toc_begin_here)
             && let Some((instr, locked, props)) = self.toc_field.take()
         {
             self.rev_open(w, &props);
-            self.field_start(w, &instr, locked, &props);
+            self.field_start(w, &instr, locked, "", &props);
             self.rev_close(w, &props);
         }
         let toc_end = std::mem::take(&mut self.toc_end_here);
@@ -369,8 +384,9 @@ impl Writer<'_> {
     fn rev_attrs(&mut self, idx: u32) -> (String, String, String) {
         self.next_rev_id += 1;
         let r = self.doc.revisions.get(idx as usize);
-        let author = r.map(|r| r.author.clone()).filter(|a| !a.is_empty()).unwrap_or_else(|| "Unknown".into());
-        let date = r.map(|r| r.date.clone()).unwrap_or_default();
+        let author = super::annotation_author(self.doc, r.map_or("", |r| r.author.as_str())).to_string();
+        // Remove date and time (§17.15.1.69): tracked changes are saved without `w:date`.
+        let date = if self.doc.settings.remove_date_time { String::new() } else { r.map(|r| r.date.clone()).unwrap_or_default() };
         (self.next_rev_id.to_string(), author, date)
     }
 
@@ -463,7 +479,7 @@ impl Writer<'_> {
                     w.empty("w:commentRangeEnd", &[("w:id", &s)]);
                     w.open("w:r", &[]);
                     w.open("w:rPr", &[]);
-                    w.val("w:rStyle", "CommentReference");
+                    w.val("w:rStyle", comment_reference_style(self.doc));
                     w.close("w:rPr");
                     w.empty("w:commentReference", &[("w:id", &s)]);
                     w.close("w:r");
@@ -471,15 +487,19 @@ impl Writer<'_> {
             }
             InlineObject::Equation { linear, display, math } => {
                 // Automatic equation numbers become text: Word numbers nothing by itself.
+                let color = match props.color {
+                    Some(TextColor::Rgb(c)) => Some(c),
+                    _ => None,
+                };
                 match super::math::resolve_numbers(math, *display, &mut self.eq_number) {
-                    Some(m) => super::math::write_equation(w, linear, *display, &m),
-                    None => super::math::write_equation(w, linear, *display, math),
+                    Some(m) => super::math::write_equation(w, linear, *display, &m, color),
+                    None => super::math::write_equation(w, linear, *display, math, color),
                 }
             }
-            InlineObject::Field { instr, result, locked, .. } => self.field(w, instr, result, *locked, props),
+            InlineObject::Field { instr, result, locked, form, .. } => self.field(w, instr, result, *locked, form, props),
             InlineObject::FieldStart { instr, locked } => {
                 self.rev_open(w, props);
-                self.field_start(w, instr, *locked, props);
+                self.field_start(w, instr, *locked, "", props);
                 self.rev_close(w, props);
             }
             InlineObject::FieldEnd => {
@@ -535,38 +555,53 @@ impl Writer<'_> {
                     (None, None, None) => None,
                 };
                 let Some(mut root) = root else { return };
-                if ink {
+                let direct_ink = ink && root.name == "w:contentPart";
+                if ink && !direct_ink {
                     Self::ink_transform(&mut root, (graphic.w, graphic.h), (*gw, *gh), float, 0);
                 }
-                let alternate = (ink && root.name == "mc:AlternateContent").then_some(&root);
+                // Native ink, or an Office 2016 chart (`cx:chart`) with its fallback picture.
+                let alternate = (root.name == "mc:AlternateContent").then_some(&root);
                 let fallback = alternate.and_then(|e| e.child("mc:Fallback"));
-                let native = alternate.and_then(|e| e.child("mc:Choice")).and_then(|e| e.find("a:graphic"));
+                let choice = alternate.and_then(|e| e.child("mc:Choice"));
+                let native = choice.and_then(|e| e.find("a:graphic"));
                 if alternate.is_some() && native.is_none() {
                     return;
                 }
+                // A chart's picture gets the chart's current frame too; ink's VML preview is resized in place.
+                let picture = if ink { None } else { fallback.and_then(|e| e.find("a:graphic")) };
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 self.rpr(w, props);
-                if fallback.is_some() {
-                    w.open("mc:AlternateContent", &[]);
-                    w.open("mc:Choice", &[("Requires", "wpi")]);
-                }
-                w.open("w:drawing", &[]);
-                let docpr = self.next_docpr();
-                let name = match graphic.kind {
-                    wordcraft_doc::graphic::GraphicKind::Chart => format!("Chart {docpr}"),
-                    wordcraft_doc::graphic::GraphicKind::Diagram => format!("Diagram {docpr}"),
-                    wordcraft_doc::graphic::GraphicKind::Ink => format!("Ink {docpr}"),
-                };
-                self.drawing_open(w, float, *gw, *gh, &docpr, &name, alt);
-                w.empty("wp:cNvGraphicFramePr", &[]);
-                w.raw(&native.unwrap_or(&root).to_xml());
-                w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
-                w.close("w:drawing");
-                if let Some(fallback) = fallback {
-                    w.close("mc:Choice");
-                    w.raw(&fallback.to_xml());
-                    w.close("mc:AlternateContent");
+                if direct_ink {
+                    w.raw(&root.to_xml());
+                } else {
+                    if fallback.is_some() {
+                        let requires = if ink { "wpi" } else { choice.and_then(|c| c.attr("Requires")).unwrap_or_default() };
+                        w.open("mc:AlternateContent", &[]);
+                        w.open("mc:Choice", &[("Requires", requires)]);
+                    }
+                    let docpr = self.next_docpr();
+                    let name = match graphic.kind {
+                        wordcraft_doc::graphic::GraphicKind::Chart => format!("Chart {docpr}"),
+                        wordcraft_doc::graphic::GraphicKind::Diagram => format!("Diagram {docpr}"),
+                        wordcraft_doc::graphic::GraphicKind::Ink => format!("Ink {docpr}"),
+                    };
+                    let z = self.z;
+                    self.graphic_frame(w, float, (*gw, *gh), &docpr, &name, alt, native.unwrap_or(&root));
+                    if let Some(fallback) = fallback {
+                        w.close("mc:Choice");
+                        match picture {
+                            Some(picture) => {
+                                // Both branches are one object: same id and stacking order.
+                                self.z = z;
+                                w.open("mc:Fallback", &[]);
+                                self.graphic_frame(w, float, (*gw, *gh), &docpr, &name, alt, picture);
+                                w.close("mc:Fallback");
+                            }
+                            None => w.raw(&fallback.to_xml()),
+                        }
+                        w.close("mc:AlternateContent");
+                    }
                 }
                 w.close("w:r");
                 self.rev_close(w, props);
@@ -618,7 +653,7 @@ impl Writer<'_> {
                 }
                 // Tight and Through wrapping need a polygon: the shape's outline unless it has one.
                 if matches!(float.wrap, Wrap::Tight | Wrap::Through) && float.wrap_polygon.is_none() {
-                    float.wrap_polygon = wordcraft_doc::wrap::shape_outline(*kind, *sw, *sh)
+                    float.wrap_polygon = wordcraft_doc::wrap::shape_outline(*kind, *sw, *sh, extra.corner)
                         .and_then(|pts| wordcraft_doc::wrap::WrapPolygon::from_unit(false, &pts))
                         .map(std::sync::Arc::new);
                 }
@@ -760,7 +795,7 @@ impl Writer<'_> {
         }
     }
 
-    fn field(&mut self, w: &mut W, instr: &str, result: &str, locked: bool, props: &CharProps) {
+    fn field(&mut self, w: &mut W, instr: &str, result: &str, locked: bool, form: &str, props: &CharProps) {
         if self.toc_hold_end && is_toc(instr) {
             // A TOC heading's field opens in the first entry and closes after the last (see `toc_span`).
             self.toc_hold_end = false;
@@ -781,7 +816,7 @@ impl Writer<'_> {
             w.close("w:r");
         };
         self.rev_open(w, props);
-        self.field_start(w, instr, locked, props);
+        self.field_start(w, instr, locked, form, props);
         if !result.is_empty() {
             run(w, &|w| {
                 let mut buf = String::new();
@@ -859,7 +894,9 @@ impl Writer<'_> {
     }
 
     /// A field's begin, instruction and separate runs.
-    fn field_start(&self, w: &mut W, instr: &str, locked: bool, props: &CharProps) {
+    /// A field's begin, code and separator; `form` is a legacy form field's `w:ffData`, which
+    /// belongs inside the begin.
+    fn field_start(&self, w: &mut W, instr: &str, locked: bool, form: &str, props: &CharProps) {
         let del = self.is_del(props);
         let run = |w: &mut W, f: &dyn Fn(&mut W)| {
             w.open("w:r", &[]);
@@ -868,10 +905,13 @@ impl Writer<'_> {
             w.close("w:r");
         };
         run(w, &|w| {
-            if locked {
-                w.empty("w:fldChar", &[("w:fldCharType", "begin"), ("w:fldLock", "1")])
+            let attrs: &[(&str, &str)] = if locked { &[("w:fldCharType", "begin"), ("w:fldLock", "1")] } else { &[("w:fldCharType", "begin")] };
+            if form.is_empty() {
+                w.empty("w:fldChar", attrs);
             } else {
-                w.empty("w:fldChar", &[("w:fldCharType", "begin")])
+                w.open("w:fldChar", attrs);
+                w.raw(form);
+                w.close("w:fldChar");
             }
         });
         let instr_text = format!(" {} ", instr.trim());
@@ -886,7 +926,7 @@ impl Writer<'_> {
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
-        nv_props(w, "pic:cNvPr", "0", file, alt, &float.alt);
+        nv_props(w, "pic:cNvPr", "0", file, alt, &float.alt, float.hidden);
         w.open("pic:cNvPicPr", &[]);
         w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
         w.close("pic:cNvPicPr");
@@ -918,7 +958,7 @@ impl Writer<'_> {
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
             let name = shape_name(*kind, freeform.as_deref(), id);
-            nv_props(w, "wps:cNvPr", id, &name, &float.alt.text, &float.alt);
+            nv_props(w, "wps:cNvPr", id, &name, &float.alt.text, &float.alt, float.hidden);
         }
         if kind.is_connector() {
             // A connector's glued ends (ECMA-376 §20.1.2.2.8 `cNvCxnSpPr`).
@@ -945,7 +985,9 @@ impl Writer<'_> {
             ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => "rect",
             ShapeKind::RoundedRectangle => "roundRect",
             ShapeKind::Ellipse => "ellipse",
+            ShapeKind::FlowchartOr => "flowChartOr",
             ShapeKind::Triangle => "triangle",
+            ShapeKind::RightTriangle => "rtTriangle",
             ShapeKind::Diamond => "diamond",
             ShapeKind::Line => "line",
             ShapeKind::StraightConnector => "straightConnector1",
@@ -959,7 +1001,15 @@ impl Writer<'_> {
             Some(f) => cust_geom(w, f, *sw, *sh),
             None => {
                 w.open("a:prstGeom", &[("prst", prst)]);
-                w.empty("a:avLst", &[]);
+                match extra.corner.filter(|_| *kind == ShapeKind::RoundedRectangle) {
+                    Some(c) => {
+                        w.open("a:avLst", &[]);
+                        let fmla = format!("val {}", c.min(wordcraft_doc::connector::MAX_CORNER));
+                        w.empty("a:gd", &[("name", "adj"), ("fmla", &fmla)]);
+                        w.close("a:avLst");
+                    }
+                    None => w.empty("a:avLst", &[]),
+                }
                 w.close("a:prstGeom");
             }
         }
@@ -1055,6 +1105,17 @@ impl Writer<'_> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// A `w:drawing` holding `graphic` (an `a:graphic`) in a frame of the object's size and place.
+    #[allow(clippy::too_many_arguments)]
+    fn graphic_frame(&mut self, w: &mut W, float: &Float, (gw, gh): (f32, f32), docpr: &str, name: &str, alt: &str, graphic: &crate::xml::El) {
+        w.open("w:drawing", &[]);
+        self.drawing_open(w, float, gw, gh, docpr, name, alt);
+        w.empty("wp:cNvGraphicFramePr", &[]);
+        w.raw(&graphic.to_xml());
+        w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
+        w.close("w:drawing");
+    }
+
     fn drawing_open(&mut self, w: &mut W, float: &Float, iw: f32, ih: f32, docpr: &str, name: &str, alt: &str) {
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
         if float.wrap == Wrap::Inline {
@@ -1134,7 +1195,7 @@ impl Writer<'_> {
             Wrap::TopAndBottom => w.empty("wp:wrapTopAndBottom", &[]),
             Wrap::BehindText | Wrap::InFrontOfText => w.empty("wp:wrapNone", &[]),
         }
-        nv_props(w, "wp:docPr", docpr, name, alt, &float.alt);
+        nv_props(w, "wp:docPr", docpr, name, alt, &float.alt, float.hidden);
     }
 
     fn table(&mut self, w: &mut W, t: &Table, rels: &mut PartRels, depth: usize) {
@@ -1196,9 +1257,34 @@ impl Writer<'_> {
         w.close("w:tbl");
     }
 
+    /// The section's headers, plus the header holding only the watermark in each slot the
+    /// pages show (first page with a title page, even pages with even/odd headers) that has no
+    /// header of its own or linked from an earlier section. Sections are written in body order.
+    fn watermark_headers(&mut self, s: &SectionProps) -> wordcraft_doc::section::HeaderSet {
+        let mut set = s.headers;
+        let linked = &mut self.linked_headers;
+        if self.doc.settings.watermark.as_ref().and_then(super::watermark::text).is_some() {
+            let id = self.wm_header;
+            if set.default.or(linked.default).is_none() {
+                set.default = Some(id);
+            }
+            if s.title_page && set.first.or(linked.first).is_none() {
+                set.first = Some(id);
+            }
+            if self.doc.settings.even_odd_headers && set.even.or(linked.even).is_none() {
+                set.even = Some(id);
+            }
+        }
+        linked.default = set.default.or(linked.default);
+        linked.first = set.first.or(linked.first);
+        linked.even = set.even.or(linked.even);
+        set
+    }
+
     pub fn sectpr(&mut self, w: &mut W, s: &SectionProps, rels: &mut PartRels) {
         w.open("w:sectPr", &[]);
-        for (set, footer) in [(&s.headers, false), (&s.footers, true)] {
+        let headers = self.watermark_headers(s);
+        for (set, footer) in [(&headers, false), (&s.footers, true)] {
             for (kind, id) in [("default", set.default), ("first", set.first), ("even", set.even)] {
                 let Some(id) = id else { continue };
                 if let Some(rid) = self.hf_rel(id, footer, rels) {
@@ -1277,7 +1363,7 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:lnNumType", &refs);
         }
-        if s.page_num_start.is_some() || s.page_num_format != wordcraft_doc::section::NumFormat::Decimal {
+        if s.page_num_set || s.page_num_start.is_some() || s.page_num_format != wordcraft_doc::section::NumFormat::Decimal {
             let mut a = vec![("w:fmt", s.page_num_format.ooxml().to_string())];
             if let Some(st) = s.page_num_start {
                 a.push(("w:start", st.to_string()));
@@ -1304,15 +1390,19 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             let refs: Vec<(&str, &str)> = ca.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:cols", &refs);
         }
+        if let Some(on) = s.form_prot {
+            w.empty("w:formProt", if on { &[] } else { &[("w:val", "0")] });
+        }
         match s.valign {
-            wordcraft_doc::props::VAlign::Top => {}
-            wordcraft_doc::props::VAlign::Center => w.val("w:vAlign", "center"),
-            wordcraft_doc::props::VAlign::Bottom => w.val("w:vAlign", "bottom"),
+            wordcraft_doc::section::PageVAlign::Top => {}
+            wordcraft_doc::section::PageVAlign::Center => w.val("w:vAlign", "center"),
+            wordcraft_doc::section::PageVAlign::Justify => w.val("w:vAlign", "both"),
+            wordcraft_doc::section::PageVAlign::Bottom => w.val("w:vAlign", "bottom"),
         }
         if s.title_page {
             w.empty("w:titlePg", &[]);
         }
-        if s.text_direction.is_turned() {
+        if s.text_direction.is_turned() || s.text_direction_set {
             w.val("w:textDirection", s.text_direction.ooxml());
         }
         if s.rtl {
@@ -1537,13 +1627,16 @@ fn toc_span(bl: &Blocks) -> Option<(usize, usize)> {
 /// `CT_NonVisualDrawingProps`) with its alt text `descr`, its title, and the decorative mark as
 /// the `adec:decorative` extension ([MS-ODRAWXML]). A description that is only the title (read
 /// from a file with no description) is not written twice.
-pub(super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, alt: &AltText) {
+pub(super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, alt: &AltText, hidden: bool) {
     let mut attrs = vec![("id", id), ("name", name)];
     if descr != alt.title || descr.is_empty() {
         attrs.push(("descr", descr));
     }
     if !alt.title.is_empty() {
         attrs.push(("title", alt.title.as_str()));
+    }
+    if hidden {
+        attrs.push(("hidden", "1"));
     }
     if !alt.decorative {
         w.empty(tag, &attrs);
@@ -1585,4 +1678,15 @@ pub(super) fn note_pr_inner(w: &mut W, pr: &NoteProps) {
     if let Some(r) = pr.num_restart {
         w.val("w:numRestart", r.ooxml());
     }
+}
+
+/// The character style for comment reference marks: the document's "annotation reference" style
+/// (Word's built-in name; localized documents give it another id, e.g. Polish
+/// `Odwoaniedokomentarza`), else `CommentReference`.
+fn comment_reference_style(doc: &wordcraft_doc::Document) -> &str {
+    doc.styles
+        .styles
+        .iter()
+        .find(|s| s.kind == wordcraft_doc::styles::StyleKind::Character && s.name.eq_ignore_ascii_case("annotation reference"))
+        .map_or("CommentReference", |s| s.id.as_str())
 }

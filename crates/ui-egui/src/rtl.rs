@@ -194,3 +194,32 @@ pub fn radio_value<V: PartialEq>(ui: &mut Ui, current: &mut V, alternative: V, t
     })
     .inner
 }
+
+/// `ui.radio(selected, text).clicked()`, with the button on the side reading starts from.
+pub fn radio(ui: &mut Ui, selected: bool, text: impl Into<egui::WidgetText>) -> bool {
+    if !flows(ui) {
+        return ui.radio(selected, text).clicked();
+    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = ui.spacing().icon_spacing;
+        let mark = ui.radio(selected, "");
+        let label = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
+        mark.clicked() || label.clicked()
+    })
+    .inner
+}
+
+/// A check box showing the mixed (indeterminate) state, with the box on the side reading starts
+/// from; true when it was clicked.
+pub fn indeterminate_checkbox(ui: &mut Ui, text: &str) -> bool {
+    if !flows(ui) {
+        return ui.add(egui::Checkbox::new(&mut false, text).indeterminate(true)).clicked();
+    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = ui.spacing().icon_spacing;
+        let mark = ui.add(egui::Checkbox::new(&mut false, "").indeterminate(true));
+        let label = ui.add(egui::Label::new(text).selectable(false).sense(egui::Sense::click()));
+        mark.clicked() || label.clicked()
+    })
+    .inner
+}

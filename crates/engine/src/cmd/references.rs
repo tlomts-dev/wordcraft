@@ -1,8 +1,10 @@
 //! References tab: table of contents, footnotes/endnotes, captions; field updates.
 
 use serde_json::{Value, json};
+use wordcraft_doc::numbering::{Counters, LevelSuffix};
 use wordcraft_doc::para::{InlineObject, NoteKind, OBJ};
 use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
+use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, para_block};
 
 use super::{delete_selection, sel_result};
@@ -35,7 +37,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .key("Mod+Alt+F")
             .params(r#"{"text"?: string, "mark"?: string (a custom mark instead of the number)}"#),
         CommandSpec::new("references.endnote", "Insert Endnote", "References › Footnotes", |s, v| note(s, v, NoteKind::Endnote))
-            .key("Mod+Alt+D")
+            // macOS takes ⌘⌥D to show and hide the Dock; Word for Mac uses ⌘⌥E.
+            .key(super::mac_or("Mod+Alt+E", "Mod+Alt+D"))
             .params(r#"{"text"?: string, "mark"?: string (a custom mark instead of the number)}"#),
         CommandSpec::new("references.convertNotes", "Convert Notes", "References › Footnotes", |s, v| {
             let (foot, end) = match p::req_str(v, "to")? {
@@ -223,6 +226,13 @@ struct TocEntry {
     lead: usize,
 }
 
+/// The headings of the body, in document order, as (body block, level 1–9, text, leading page
+/// breaks): what Insert › Link › Place in This Document lists.
+pub(crate) fn headings(s: &Session) -> Vec<(usize, u8, String, usize)> {
+    let f = FieldCode::parse("TOC \\o \"1-9\" \\u");
+    toc_entries(s, &f).into_iter().map(|e| (e.path.last(), e.level.saturating_add(1), e.text, e.lead)).collect()
+}
+
 /// The heading level (1–9) of a built-in heading style.
 fn heading_style_level(p: &Paragraph) -> Option<u8> {
     p.props.style.as_deref()?.strip_prefix("Heading")?.trim().parse::<u8>().ok().filter(|l| (1..=9).contains(l))
@@ -244,11 +254,26 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
     let tc = f.has('f').then(|| f.arg('f').unwrap_or("").to_ascii_uppercase());
     let tc_levels = f.arg('l').and_then(level_range).unwrap_or((1, 9));
     let mut v = Vec::new();
+    // Every numbered paragraph advances the list counters, so an entry carries the number its
+    // heading shows (`1.1`), followed by the level's separator, as Word writes it.
+    let mut counters = Counters::default();
     for path in s.doc.para_paths(StoryRef::Body) {
+        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
+        let number = p
+            .props
+            .numbering
+            .or_else(|| s.doc.styles.resolve_para(&p.props).numbering)
+            .filter(|n| n.num != 0)
+            .and_then(|n| counters.next_label(&s.doc.numbering, n.num, n.level))
+            .filter(|(label, def)| !label.is_empty() && !matches!(def.format, NumFormat::Bullet | NumFormat::None))
+            .map(|(label, def)| match def.suffix {
+                LevelSuffix::Tab => format!("{label}\t"),
+                LevelSuffix::Space => format!("{label} "),
+                LevelSuffix::Nothing => label,
+            });
         if path.depth() > 0 {
             continue;
         }
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         let style = p.props.style.as_deref().unwrap_or("Normal");
         if style.starts_with("TOC") {
             continue;
@@ -272,7 +297,8 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
         if let Some(l) = by_style.or(by_outline).or(if hidden { None } else { by_heading }) {
             let t = p.plain_text().replace(['\u{000C}', '\n', '\t'], " ").trim().to_string();
             if !t.is_empty() {
-                v.push(TocEntry { path: path.clone(), level: l - 1, text: t, lead });
+                let text = number.map_or_else(|| t.clone(), |n| format!("{n}{t}"));
+                v.push(TocEntry { path: path.clone(), level: l - 1, text, lead });
             }
         }
         if let Some(id) = &tc {
@@ -309,6 +335,13 @@ fn toc_range(s: &Session) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
+/// The caret is in the table of contents (its heading or an entry), where Word's context menu
+/// offers Update Field for the whole table.
+pub fn caret_in_toc(s: &Session) -> bool {
+    let at = &s.sel.focus;
+    at.story == StoryRef::Body && at.path.depth() == 0 && toc_range(s).is_some_and(|(start, end)| (start..=end).contains(&at.path.last()))
+}
+
 /// A TOC imported as a range field (`FieldStart`…`FieldEnd`: one without a TOC heading, or with
 /// content around it the engine's TOC can't reproduce) becomes the engine's TOC before an update,
 /// so Update Table refreshes it rather than adding a second one: an empty `TOC` field where the
@@ -334,8 +367,22 @@ fn range_toc_to_field(s: &mut Session) -> Result<(), CmdError> {
     let Some(after_end) = r.end.off.checked_add(OBJ.len_utf8()) else { return Ok(()) };
     let end = Pos { off: after_end, ..r.end.clone() };
     let props = s.doc.para_at(&r.start).map(|p| p.props_of_char(r.start.off).clone()).unwrap_or_default();
-    let at = s.doc.delete_range(&r.start, &end)?;
-    let field = InlineObject::Field { instr: r.instr.trim().to_string(), result: String::new(), locked: false, code: false };
+    let mut at = s.doc.delete_range(&r.start, &end)?;
+    // A range that filled its own paragraphs right under a TOC heading (as Word and other writers
+    // lay it out) leaves an empty paragraph behind, which would show as a blank line above the
+    // entries. The field goes at the end of the heading instead, as `insert_toc` places it.
+    let i = at.path.last();
+    if at.path.depth() == 0
+        && i > 0
+        && s.doc.para_at(&at).is_some_and(|p| p.is_empty())
+        && s.doc.body.get(i - 1).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some("TOCHeading"))
+    {
+        s.doc.remove_block(StoryRef::Body, &at.path)?;
+        let heading = Path::top(i - 1);
+        let len = s.doc.para(StoryRef::Body, &heading).map_or(0, |p| p.len());
+        at = Pos { story: StoryRef::Body, path: heading, off: len };
+    }
+    let field = InlineObject::Field { instr: r.instr.trim().to_string(), result: String::new(), locked: false, code: false, form: String::new() };
     let after = s.doc.insert_object(&at, field, &props)?;
     if s.doc.para_at(&after).is_some_and(|p| after.off < p.len()) {
         s.doc.split_paragraph(&after)?;
@@ -385,7 +432,7 @@ fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
     let mut head = Paragraph::with_text(&title, CharProps::default()).styled("TOCHeading");
     head.insert_object(
         head.len(),
-        InlineObject::Field { instr: toc_instr(v), result: String::new(), locked: false, code: false },
+        InlineObject::Field { instr: toc_instr(v), result: String::new(), locked: false, code: false, form: String::new() },
         &CharProps::default(),
     )?;
     let i = if s.doc.para_at(&at).is_some_and(|p| p.is_empty()) {
@@ -405,7 +452,7 @@ fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
 
 /// A hidden `_Toc` bookmark around the heading at body block `i` (after its leading page breaks),
 /// reusing one already there; its name.
-fn toc_bookmark(s: &mut Session, i: usize, lead: usize) -> Result<String, CmdError> {
+pub(crate) fn toc_bookmark(s: &mut Session, i: usize, lead: usize) -> Result<String, CmdError> {
     const MARK: usize = wordcraft_doc::para::OBJ.len_utf8();
     let para = s.doc.para(StoryRef::Body, &Path::top(i)).ok_or_else(|| CmdError::Failed("heading is gone".into()))?;
     if let Some(InlineObject::BookmarkStart { name }) = para.object_at(lead)
@@ -460,7 +507,10 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>) -> Result<(), CmdE
     for i in (start + 1..=end).rev() {
         s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
     }
-    let width = super::page::sect(s).text_width();
+    // The text width of the TOC's own section, not the caret's: after Select All the caret sits
+    // at the end of the document, possibly in a wider (landscape) section.
+    let section = s.doc.section_index_of(start);
+    let width = s.doc.sections().get(section).map_or_else(|| super::page::sect(s).text_width(), |(_, x)| x.text_width());
     let entries = toc_entries(s, &f);
     let links: Vec<Option<String>> = if f.has('h') {
         let mut v = Vec::new();
@@ -497,13 +547,33 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>) -> Result<(), CmdE
             let mut para = Paragraph::with_text(&text, props).styled(&format!("TOC{}", e.level + 1));
             para.mark = CharProps::default();
             if show_page && sep.contains('\t') {
-                para.props.tabs = Some(vec![TabStop { pos: width - 0.5, align: TabAlign::Right, leader }]);
+                let right = TabStop { pos: width - 0.5, align: TabAlign::Right, leader };
+                para.props.tabs = Some(entry_tabs(s, &para.props, &e.text, right));
             }
             s.doc.insert_block(StoryRef::Body, &Path::top(start + 1 + k), Block::Para(para))?;
         }
     }
     s.touch();
     Ok(())
+}
+
+/// The tab stops of a TOC entry: the right-aligned stop for its page number, and, when the
+/// entry text itself has no tab, Clear stops for the left, centre and decimal stops its style
+/// sets before that. Those stops are for a number set off by a tab (`1.1<tab>Title`); with the
+/// number set off by a space, or no number, a short entry's page tab would stop at one of them
+/// (without the leader), and so would the tab on the last line of an entry that wraps.
+fn entry_tabs(s: &Session, props: &wordcraft_doc::ParaProps, text: &str, right: TabStop) -> Vec<TabStop> {
+    let mut tabs = Vec::new();
+    if !text.contains('\t') {
+        let style = s.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: props.style.clone(), ..Default::default() });
+        for t in style.tabs {
+            if t.pos < right.pos - 0.5 && !matches!(t.align, TabAlign::Right | TabAlign::Bar) {
+                tabs.push(TabStop { pos: t.pos, align: TabAlign::Clear, leader: TabLeader::None });
+            }
+        }
+    }
+    tabs.push(right);
+    tabs
 }
 
 fn note(s: &mut Session, v: &Value, kind: NoteKind) -> CmdResult {
@@ -515,7 +585,7 @@ fn note(s: &mut Session, v: &Value, kind: NoteKind) -> CmdResult {
         NoteKind::Endnote => (PartKind::Endnote, "EndnoteText", "EndnoteReference"),
     };
     let mut para = Paragraph::new().styled(style);
-    let id = s.doc.add_part(pk, Vec::new());
+    let id = s.doc.try_add_part(pk, Vec::new())?;
     para.insert_object(
         0,
         InlineObject::NoteRef { kind, id, custom: custom.clone() },
@@ -669,7 +739,7 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
     let chapter = p::u64(v, "chapter").filter(|l| (1..=9).contains(l));
     let sep = p::str(v, "separator").and_then(|x| CHAPTER_SEPARATORS.iter().find(|s| **s == x)).copied().unwrap_or("-");
     let mut para = Paragraph::new().styled("Caption");
-    let field = |instr: String| InlineObject::Field { instr, result: String::new(), locked: false, code: false };
+    let field = |instr: String| InlineObject::Field { instr, result: String::new(), locked: false, code: false, form: String::new() };
     if !p::bool(v, "excludeLabel").unwrap_or(false) {
         para.insert_text(0, &format!("{label} "), &CharProps::default())?;
     }
@@ -694,43 +764,23 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// The number part of a heading's list label (`Chapter 2.` → `2`).
-fn chapter_number(label: &str) -> String {
-    let word = label.split_whitespace().last().unwrap_or("");
-    word.trim_matches(|c: char| !c.is_alphanumeric()).to_string()
-}
-
 /// Renumber the body's SEQ fields in document order, honouring `\* format`, `\s level` (restart
 /// after each heading of that level), `\r n` (reset to n), `\c` (repeat) and `\h` (hide), and
-/// fill chapter-number `STYLEREF n \s` fields with the last level-n heading's number (its list
-/// label, or its count when the heading isn't numbered).
+/// fill body STYLEREF fields ([`wordcraft_layout::styleref`]): chapter numbers (`STYLEREF n \s`,
+/// the last level-n heading's number, or its count when the heading isn't numbered) and the
+/// text or number of the nearest paragraph of a style.
 pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
-    let mut counters = wordcraft_doc::numbering::Counters::default();
     let mut headings = [0u32; 9];
-    let mut chapter: [String; 9] = Default::default();
-    let mut heading_text: [String; 9] = Default::default();
     let mut seq: std::collections::HashMap<String, (u32, u32)> = Default::default();
+    // Built on the first STYLEREF (field results don't change what it finds).
+    let mut styles: Option<wordcraft_layout::styleref::StyleIndex> = None;
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        let label = p
-            .props
-            .numbering
-            .or_else(|| s.doc.styles.resolve_para(&p.props).numbering)
-            .filter(|n| n.num != 0)
-            .and_then(|n| counters.next_label(&s.doc.numbering, n.num, n.level))
-            .map(|(l, _)| l);
         if let Some(l) = heading_style_level(p)
             && let Some(k) = (l as usize).checked_sub(1)
             && let Some(count) = headings.get_mut(k)
         {
             *count = count.saturating_add(1);
-            let n = label.map(|l| chapter_number(&l)).filter(|n| !n.is_empty()).unwrap_or_else(|| count.to_string());
-            if let Some(c) = chapter.get_mut(k) {
-                *c = n;
-            }
-            if let Some(t) = heading_text.get_mut(k) {
-                *t = p.plain_text().trim().to_string();
-            }
         }
         let mut updates: Vec<(usize, String)> = Vec::new();
         for (k, o) in p.objects.iter().enumerate() {
@@ -756,15 +806,9 @@ pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
                     updates.push((k, if f.has('h') { String::new() } else { fmt.format(n.0) }));
                 }
                 "STYLEREF" => {
-                    let level = f
-                        .args
-                        .first()
-                        .and_then(|a| a.strip_prefix("Heading").unwrap_or(a).trim().parse::<usize>().ok())
-                        .and_then(|l| l.checked_sub(1));
-                    let Some(level) = level else { continue };
-                    let r = if f.has('s') || f.has('n') { chapter.get(level) } else { heading_text.get(level) };
-                    if let Some(r) = r {
-                        updates.push((k, r.clone()));
+                    let ix = styles.get_or_insert_with(|| wordcraft_layout::styleref::StyleIndex::build(&s.doc));
+                    if let Some(i) = ix.index_of(&path) {
+                        updates.push((k, ix.eval(instr, wordcraft_layout::styleref::At::Body(i))));
                     }
                 }
                 _ => {}
@@ -872,6 +916,96 @@ mod tests {
             }
         }
         out
+    }
+
+    /// #775: body STYLEREF fields show the nearest paragraph of the style before them.
+    #[test]
+    fn body_styleref_finds_the_heading_before_it() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Intro\nChapter One\ntext here\nChapter Two\nend"));
+        for t in ["Chapter One", "Chapter Two"] {
+            s.run("select.text", &json!({"text": t})).unwrap();
+            s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+        }
+        s.run("select.text", &json!({"text": "text here"})).unwrap();
+        s.run("caret.end", &json!({})).unwrap();
+        s.run("insert.field", &json!({"instr": r#"STYLEREF "Heading 1" \* MERGEFORMAT"#})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.field", &json!({"instr": "STYLEREF 1 \\p"})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("insert.field", &json!({"instr": "STYLEREF \"Heading 1\" \\p"})).unwrap();
+        s.run("insert.field", &json!({"instr": "STYLEREF \"No Such Style\""})).unwrap();
+        let results: Vec<String> = fields(&s).into_iter().map(|f| f.1).collect();
+        assert_eq!(results, ["below", wordcraft_layout::styleref::NO_TEXT, "Chapter One", "above"]);
+    }
+
+    /// #775: a template's running header `STYLEREF "heading 1"` (a complex field, opened from
+    /// DOCX) shows each page's chapter, and keeps its code through a save.
+    #[test]
+    fn docx_styleref_header_shows_each_page_s_chapter() {
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+        let heading = |t: &str, brk: bool| {
+            let b = if brk { "<w:pageBreakBefore/>" } else { "" };
+            format!(
+                r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/>{b}</w:pPr><w:r><w:t>{t}</w:t></w:r></w:p><w:p><w:r><w:t>Body of {t}.</w:t></w:r></w:p>"#
+            )
+        };
+        let body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><w:document {ns}><w:body>{}{}{}<w:sectPr><w:headerReference w:type="default" r:id="rIdH"/></w:sectPr></w:body></w:document>"#,
+            heading("Rivers", false),
+            heading("Mountains", true),
+            heading("Deserts", true)
+        );
+        let header = format!(
+            r#"<w:hdr {ns}><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> STYLEREF  "heading 1" \* MERGEFORMAT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Cached</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:hdr>"#
+        );
+        let styles = format!(
+            r#"<w:styles {ns}><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/></w:style></w:styles>"#
+        );
+        let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdH" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, text) in [
+            ("_rels/.rels", root),
+            ("word/document.xml", body.as_str()),
+            ("word/_rels/document.xml.rels", rels),
+            ("word/header1.xml", header.as_str()),
+            ("word/styles.xml", styles.as_str()),
+        ] {
+            zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
+        }
+        let bytes = zw.finish().unwrap().into_inner();
+        let headers = |s: &mut Session| -> Vec<String> {
+            s.layout()
+                .pages
+                .iter()
+                .map(|p| {
+                    p.header
+                        .iter()
+                        .filter_map(|it| {
+                            if let wordcraft_layout::Placed::Lines { para, .. } = it {
+                                Some(para.shown.iter().map(|x| x.1.clone()).collect::<String>())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<String>()
+                })
+                .collect()
+        };
+        let mut s = Session::new(crate::io::open_bytes("chapters.docx", &bytes).unwrap());
+        assert_eq!(headers(&mut s), ["Rivers", "Mountains", "Deserts"]);
+        let saved = crate::io::save_bytes("chapters.docx", &s.doc).unwrap();
+        let mut again = Session::new(crate::io::open_bytes("chapters.docx", &saved).unwrap());
+        assert_eq!(headers(&mut again), ["Rivers", "Mountains", "Deserts"]);
+        let hid = again.doc.last_section.headers.default.unwrap();
+        let instr = again.doc.para_paths(StoryRef::Part(hid)).iter().find_map(|p| {
+            again.doc.para(StoryRef::Part(hid), p).unwrap().objects.iter().find_map(|o| match o {
+                InlineObject::Field { instr, .. } => Some(instr.clone()),
+                _ => None,
+            })
+        });
+        assert!(instr.is_some_and(|i| i.contains(r#"STYLEREF  "heading 1""#)));
     }
 
     /// #402: Custom Table of Contents settings become TOC switches, and updating honours them:

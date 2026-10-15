@@ -1699,7 +1699,6 @@ preview	Title	العنوان
 	✓ None	✓ بلا
 	Formatted	منسّق
 	Interface size:	حجم الواجهة:
-	Makes the ribbon, menus and dialogs larger or smaller, on top of your system's display scaling. Document zoom is separate.	يكبّر الشريط والقوائم ومربعات الحوار أو يصغّرها، إضافةً إلى تحجيم العرض في نظامك. تكبير المستند مستقل عن ذلك.
 	Copyright Sign	علامة حقوق النشر
 	Demote	تخفيض المستوى
 	Edit Field Code	تحرير رمز الحقل
@@ -2485,3 +2484,128 @@ preview	Title	العنوان
 	“{text}” ({row}, {series}) isn't a number.	“{text}” ({row}، {series}) ليس رقمًا.
 	➕ New comment	➕ تعليق جديد
 	📂  Browse…	📂  استعراض…
+	In the margin	في الهامش
+	No document is open. Create a document or open one first.	لا يوجد مستند مفتوح. أنشئ مستندًا أو افتح مستندًا أولًا.
+	Only for the selected text	للنص المحدد فقط
+	Delete Bookmark	حذف الإشارة المرجعية
+	Hidden bookmarks	الإشارات المرجعية المخفية
+	Sort by:	فرز حسب:
+	{language} (no dictionary)	{language} (بلا قاموس)
+	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	لم يُثبَّت قاموس إملائي للغة {language}، لذلك لا يُدقَّق إملاؤها. يبحث WordCraft عن قاموس Hunspell باسم {name} في مجلد WORDCRAFT_DICTIONARIES وفي المواضع المعتادة للنظام.
+	Type Character Code	إدخال رمز حرف
+	Auto ({percent}%)	تلقائي ({percent}%)
+	Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate.	يكبّر الشريط والقوائم ومربعات الحوار أو يصغّرها. الوضع التلقائي يتبع تحجيم شاشة النظام؛ و100% يعني بكسلًا واحدًا من الشاشة لكل نقطة. تكبير المستند مستقل عن ذلك.
+	Croatian	الكرواتية
+	Show alignment guides when moving pictures and shapes	إظهار أدلة المحاذاة عند تحريك الصور والأشكال
+	Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely.	تلتصق الكائنات المنقولة بحواف الصفحة ومنتصفها وبالهوامش وبالكائنات الأخرى. اضغط Alt لتحريكها بحرية.
+	Word 2003 XML Document (*.xml)	مستند Word 2003 XML (*.xml)
+	Text of the nearest paragraph with a given style (running headers)	نص أقرب فقرة ذات نمط معيّن (الرؤوس المتكررة)
+	Style name:	اسم النمط:
+	Filter Recipients	تصفية المستلمين
+	Sort Recipients	فرز المستلمين
+	Filter and Sort	التصفية والفرز
+	And	و
+	Or	أو
+	Comparison	المقارنة
+	Compare to	قارن بـ
+	Add Condition	إضافة شرط
+	Remove condition	إزالة الشرط
+	Sort by	فرز حسب
+	Then by	ثم حسب
+	Ascending	تصاعدي
+	Descending	تنازلي
+	Equal to	يساوي
+	Not equal to	لا يساوي
+	Less than	أقل من
+	Greater than	أكبر من
+	Less than or equal	أقل من أو يساوي
+	Greater than or equal	أكبر من أو يساوي
+	Is blank	فارغ
+	Is not blank	غير فارغ
+	Contains	يحتوي على
+	Does not contain	لا يحتوي على
+	{count} of {total} recipients will be merged.	عدد المستلمين الذين سيُدمجون: {count} من {total}.
+	Take the last match on the page	أخذ آخر تطابق في الصفحة
+	Show its list number	إظهار رقمه في القائمة
+	Show its number relative to this field	إظهار رقمه نسبةً إلى هذا الحقل
+	Show its number with all higher levels	إظهار رقمه مع جميع المستويات الأعلى
+	Number only, without the label's words	الرقم فقط، دون كلمات التسمية
+	Add whether it is above or below	إضافة ما إذا كان أعلى أو أدنى
+	Copy to	نسخ إلى
+	Rename Document	إعادة تسمية المستند
+	Document name	اسم المستند
+	Rename	إعادة تسمية
+	Account	الحساب
+	Privacy Options	خيارات الخصوصية
+	Trust Center	مركز الثقة
+	Privacy for this document	الخصوصية لهذا المستند
+	Remove my name from comments, changes and file properties when saving	إزالة اسمي من التعليقات والتغييرات وخصائص الملف عند الحفظ
+	Leave out the date and time of comments and tracked changes when saving	حذف تاريخ التعليقات والتغييرات المتعقبة ووقتها عند الحفظ
+	The document you are editing keeps the names and dates; only the saved file leaves them out.	يحتفظ المستند الذي تحرره بالأسماء والتواريخ؛ ولا يحذفها إلا الملف المحفوظ.
+	Privacy Settings	إعدادات الخصوصية
+	Waiting for the save to finish…	بانتظار اكتمال الحفظ…
+	Saving {name} was cancelled, so it is still open and nothing was lost.	أُلغي حفظ {name}، لذلك ما زال مفتوحًا ولم يضع شيء.
+	Paper	الورق
+	Paper size:	حجم الورق:
+	Custom size	حجم مخصص
+	More Paper Sizes…	أحجام ورق أخرى…
+	The margins don't fit on a page this size; make the margins smaller first.	لا تتسع الهوامش في صفحة بهذا الحجم؛ صغّر الهوامش أولًا.
+	Full Screen	ملء الشاشة
+	Full\nScreen	ملء\nالشاشة
+	Use the browser's full screen (F11)	استخدم وضع ملء الشاشة في المتصفح (F11)
+	{name}   {height} × {width} in	{name}   {height} × {width} بوصة
+	{name}   {height} × {width} mm	{name}   {height} × {width} ملم
+	{width} × {height} mm	{width} × {height} ملم
+	{kind}, {columns} × {rows}, {size} ({paper})	{kind}, {columns} × {rows}, {size} ({paper})
+	Researcher needs an online service; WordCraft keeps your documents offline.	يحتاج «الباحث» إلى خدمة عبر الإنترنت؛ أما WordCraft فيُبقي مستنداتك دون اتصال.
+	These settings will be used for new documents.	ستُستخدم هذه الإعدادات للمستندات الجديدة.
+	can't split at the first row	لا يمكن التقسيم عند الصف الأول
+	select two or more cells to merge	حدد خليتين أو أكثر للدمج
+	there is no ink to replay	لا يوجد حبر لإعادة تشغيله
+	there's no citation after the caret	لا يوجد استشهاد بعد مؤشر الكتابة
+	this item is already at the top level	هذا العنصر في المستوى الأعلى بالفعل
+	Envelope #10	مغلف #10
+	Envelope DL	مغلف DL
+	Reading Mode	وضع القراءة
+	Column width	عرض العمود
+	Text size	حجم النص
+	Edit Document	تحرير المستند
+	Go to what:	الانتقال إلى:
+	Type +2 or -1 to move from the page you are on.	اكتب +2 أو -1 للانتقال بهذا العدد من الصفحات من الصفحة الحالية.
+	Suggested	المقترحة
+	Set Proofing Language…	تعيين لغة التدقيق…
+	Language Preferences…	تفضيلات اللغة…
+	Printer	الطابعة
+	Select a printer	اختيار طابعة
+	Refresh printers	تحديث الطابعات
+	Two-sided printing	الطباعة على الوجهين
+	Printer default	الإعداد الافتراضي للطابعة
+	One-sided	وجه واحد
+	Two-sided: long edge	وجهان: الحافة الطويلة
+	Two-sided: short edge	وجهان: الحافة القصيرة
+	Grayscale	تدرّج رمادي
+	Finding printers…	جارٍ البحث عن الطابعات…
+	No printers found. Configure a system printer or export a PDF.	لم يُعثر على طابعات. اضبط طابعة في النظام أو صدّر ملف PDF.
+	Printer discovery failed.	تعذّر اكتشاف الطابعات.
+	Submitting print job…	جارٍ إرسال مهمة الطباعة…
+	Print job submitted.	أُرسلت مهمة الطباعة.
+	Print job submitted: {receipt}	أُرسلت مهمة الطباعة: {receipt}
+	Print failed: the printing worker stopped.	فشلت الطباعة: توقف عامل الطباعة.
+	Print settings	إعدادات الطباعة
+	Submit print job	إرسال مهمة الطباعة
+	For which item:	لأي عنصر:
+	Heading	عنوان
+	Heading text	نص العنوان
+	Insert reference to:	إدراج إسناد إلى:
+	Reference type:	نوع الإسناد:
+	Dictionaries	القواميس
+	Dictionaries folder:	مجلد القواميس:
+	Not set: the system's usual places	غير معيَّن: المواضع المعتادة للنظام
+	Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.	تُستخدم ملفات Hunspell بصيغتي .aff و.dic الموجودة هنا (pl_PL وpt_BR وit_IT وhr_HR وtr_TR) قبل ملفات النظام.
+	{language}: {file}	{language}: {file}
+	{language}: no dictionary found	{language}: لم يُعثر على قاموس
+	Recover	استرداد
+	Mirror margins	هوامش معكوسة
+	Existing File or Web Page	ملف أو صفحة ويب موجودة
+	Link to:	ارتباط بـ:
+	Place in This Document	موضع في هذا المستند

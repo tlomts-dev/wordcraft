@@ -607,7 +607,22 @@ impl<'r> Builder<'r> {
             let mut lists = 0usize;
             for (i, e) in self.stack.iter().enumerate().rev() {
                 match e.kind {
-                    ElKind::Cell | ElKind::Table => break,
+                    ElKind::Cell => {
+                        // CSS inherits `text-align` from the cell, its row, row group and table
+                        // (#1381); the paragraph's own (found above) wins.
+                        if p.align.is_none() {
+                            p.align = self.stack.get(..=i).and_then(|outer| {
+                                outer
+                                    .iter()
+                                    .rev()
+                                    .take_while(|o| o.kind != ElKind::Table)
+                                    .chain(outer.iter().rev().find(|o| o.kind == ElKind::Table))
+                                    .find_map(|o| o.align)
+                            });
+                        }
+                        break;
+                    }
+                    ElKind::Table => break,
                     ElKind::Heading(n) if p.kind == Kind::Normal => p.kind = Kind::Heading(n.clamp(1, 6)),
                     ElKind::Pre if p.kind == Kind::Normal => p.kind = Kind::Code,
                     ElKind::Quote if p.kind == Kind::Normal => p.kind = Kind::Quote,
@@ -809,7 +824,10 @@ impl<'r> Builder<'r> {
                         t.rows.push(r);
                     }
                     let borderless = !t.bordered;
-                    let mut ft = FTable { rows: t.rows.into_iter().filter(|r| !r.is_empty()).collect(), widths: Vec::new(), borderless };
+                    // Keep at most MAX_ROWS rows (the model drops the rest anyway): bounds the
+                    // O(rows × rowspan) work of `insert_covered` on a table of millions of `<tr>`.
+                    let rows: Vec<_> = t.rows.into_iter().filter(|r| !r.is_empty()).take(wordcraft_doc::table::MAX_ROWS).collect();
+                    let mut ft = FTable { rows, widths: Vec::new(), borderless };
                     if !ft.rows.is_empty() {
                         ft.insert_covered();
                         self.container().push(FBlock::Table(ft));
@@ -979,7 +997,8 @@ impl<'r> Builder<'r> {
         let mut preserve = self.preserve();
         let mut page_break = false;
         match name {
-            "b" | "strong" => fmt.bold = true,
+            // A header cell is bold, as in browsers and Word, unless its own CSS says otherwise.
+            "b" | "strong" | "th" => fmt.bold = true,
             "i" | "em" | "cite" | "var" | "dfn" | "address" => fmt.italic = true,
             "u" | "ins" => fmt.underline = true,
             "s" | "strike" | "del" => fmt.strike = true,
@@ -1010,7 +1029,9 @@ impl<'r> Builder<'r> {
             }
             _ => {}
         }
-        if let Some(a) = attr(attrs, "align") {
+        // `align` on a table is about where the table sits (not imported); it doesn't align the
+        // text in its cells.
+        if let Some(a) = attr(attrs, "align").filter(|_| kind != ElKind::Table) {
             align = match a.to_ascii_lowercase().as_str() {
                 "center" | "middle" => Some(Align::Center),
                 "right" => Some(Align::Right),
@@ -1125,6 +1146,15 @@ pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
             Tok::Text(t) => b.text(&t),
             Tok::Start { name, attrs, self_close } => {
                 b.close_head_for_start(&name);
+                if crate::mathml::local(&name) == "math" && !self_close {
+                    let el = read_math(&mut lx, name, attrs);
+                    if !b.in_head()
+                        && let Some((linear, display)) = crate::mathml::read(&el)
+                    {
+                        b.start_para().inlines.push(Inline::Equation { linear, display });
+                    }
+                    continue;
+                }
                 if matches!(name.as_str(), "script" | "style" | "noscript" | "template" | "textarea") && !self_close {
                     lx.skip_past(&format!("</{name}"));
                     lx.skip_past(">");
@@ -1138,6 +1168,86 @@ pub fn parse_with(s: &str, images: ImageLoader) -> Flow {
     b.finish()
 }
 
+/// A `<math>` element (#816): its tokens up to the matching end tag, as a tree. Nesting and size
+/// are bounded; an unclosed element ends with the input.
+fn read_math(lx: &mut Lexer, name: String, attrs: Vec<(String, String)>) -> crate::mathml::El {
+    use crate::mathml::{El, Item, MAX_NODES, local};
+    let mut stack: Vec<El> = vec![El { name, attrs, children: Vec::new() }];
+    let mut count = 0usize;
+    let close = |stack: &mut Vec<El>| {
+        if stack.len() > 1
+            && let Some(done) = stack.pop()
+            && let Some(parent) = stack.last_mut()
+        {
+            parent.children.push(Item::El(done));
+        }
+    };
+    while let Some(t) = lx.next() {
+        count += 1;
+        if count > MAX_NODES * 4 {
+            // Over the cap: drop the rest of this element so its tokens aren't read as HTML text.
+            skip_math(lx, t);
+            break;
+        }
+        match t {
+            Tok::Text(t) => {
+                if let Some(top) = stack.last_mut()
+                    && !t.is_empty()
+                {
+                    top.children.push(Item::Text(t));
+                }
+            }
+            Tok::Start { name, attrs, self_close } => {
+                let el = El { name, attrs, children: Vec::new() };
+                if self_close || stack.len() > wordcraft_doc::math::MAX_DEPTH {
+                    if let Some(top) = stack.last_mut() {
+                        top.children.push(Item::El(el));
+                    }
+                } else {
+                    stack.push(el);
+                }
+            }
+            Tok::End(name) => {
+                let name = local(&name).to_string();
+                // Close up to the matching open element; a stray end tag is ignored.
+                if let Some(k) = stack.iter().rposition(|e| local(&e.name) == name) {
+                    if k == 0 {
+                        break;
+                    }
+                    while stack.len() > k {
+                        close(&mut stack);
+                    }
+                }
+            }
+        }
+    }
+    while stack.len() > 1 {
+        close(&mut stack);
+    }
+    stack.pop().unwrap_or_default()
+}
+
+/// Skip tokens (starting with `first`) up to and including the `</math>` that closes the element
+/// being read; nested `<math>` elements are counted. An unclosed element ends with the input.
+fn skip_math(lx: &mut Lexer, first: Tok) {
+    use crate::mathml::local;
+    let mut depth = 0usize;
+    let mut t = Some(first);
+    while let Some(tok) = t {
+        match tok {
+            Tok::Start { name, self_close: false, .. } if local(&name) == "math" => depth = depth.saturating_add(1),
+            Tok::End(name) if local(&name) == "math" => {
+                if depth == 0 {
+                    return;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+        t = lx.next();
+    }
+}
+
 /// Parse HTML into a document.
 pub fn import(s: &str) -> Document {
     model::to_doc(&parse(s))
@@ -1146,6 +1256,12 @@ pub fn import(s: &str) -> Document {
 /// [`import`], loading pictures that aren't `data:` URIs through `images`.
 pub fn import_with(s: &str, images: ImageLoader) -> Document {
     model::to_doc(&parse_with(s, images))
+}
+
+/// [`import_with`] onto `page` (its size and margins), which tables size to: HTML gives no page
+/// size, so the caller picks it (the region's paper, #1381).
+pub fn import_on(s: &str, images: ImageLoader, page: &wordcraft_doc::SectionProps) -> Document {
+    model::to_doc_in(&parse_with(s, images), page.clone())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1198,7 +1314,6 @@ fn text_html(t: &str) -> String {
 /// Inline spans → HTML.
 pub fn inlines_html(inlines: &[Inline]) -> String {
     let mut o = String::new();
-    let inlines = crate::model::equations_as_text(inlines);
     for i in inlines.iter() {
         match i {
             Inline::Text(t, f) => {
@@ -1269,7 +1384,8 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
             // No picture to show: the browser shows the alt text in its place.
             Inline::Figure(alt) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
-            Inline::Equation { .. } => {}
+            // MathML, which browsers, Word and LibreOffice show as an equation (#816).
+            Inline::Equation { linear, display } => o.push_str(&crate::mathml::linear_to_mathml(linear, *display)),
         }
     }
     o
@@ -1448,6 +1564,15 @@ pub fn export(doc: &Document) -> String {
     export_flow(&flow, doc.styles.default_chr.lang.as_deref().unwrap_or("en"))
 }
 
+/// `doc`'s content as an HTML fragment (no head or style sheet): what a copy puts on the system
+/// clipboard beside its text, equations as MathML (#816).
+pub fn export_fragment(doc: &Document) -> String {
+    let flow = model::from_doc(doc);
+    let mut out = String::from("<meta charset=\"utf-8\">");
+    blocks_html(&flow.blocks, &mut out, 0);
+    out
+}
+
 pub fn export_flow(flow: &Flow, lang: &str) -> String {
     let m = &flow.meta;
     let mut out = String::new();
@@ -1583,6 +1708,71 @@ mod tests {
         assert!(matches!(&p.inlines[0], Inline::Text(t, f) if t == "red" && f.bold && f.color == Some(wordcraft_doc::Rgb(255,0,0))));
         assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "l" && f.link.as_deref() == Some("http://x"))));
         assert!(p.text().ends_with("l\nn"));
+    }
+
+    /// The paragraphs of every cell of the first table, row by row.
+    fn cell_paras(f: &Flow) -> Vec<Vec<Vec<Para>>> {
+        let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+        t.rows
+            .iter()
+            .map(|r| {
+                r.iter().map(|c| c.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.clone()) } else { None }).collect()).collect()
+            })
+            .collect()
+    }
+
+    fn all_bold(p: &Para) -> bool {
+        !p.inlines.is_empty() && p.inlines.iter().all(|i| matches!(i, Inline::Text(_, f) if f.bold))
+    }
+
+    fn any_bold(p: &Para) -> bool {
+        p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) if f.bold))
+    }
+
+    #[test]
+    fn header_cells_are_bold_unless_their_css_says_otherwise() {
+        // #1381: a <th> is bold, as in browsers and Word; `font-weight:normal` on it or inside it wins.
+        let f = parse(
+            "<table><thead><tr><th>Head</th><th style='font-weight:normal'>Plain</th><th><span style='font-weight:400'>Inner</span></th></tr></thead><tbody><tr><td>a<td>b<td>c</tbody></table>",
+        );
+        let rows = cell_paras(&f);
+        assert!(all_bold(&rows[0][0][0]), "{:?}", rows[0][0]);
+        assert!(!any_bold(&rows[0][1][0]), "{:?}", rows[0][1]);
+        assert!(!any_bold(&rows[0][2][0]), "{:?}", rows[0][2]);
+        assert!(!any_bold(&rows[1][0][0]), "td stays regular");
+    }
+
+    #[test]
+    fn cell_text_align_reaches_the_cell_paragraphs() {
+        // #1381: `text-align` on a td/th, or inherited from its tr/thead/tbody/table, aligns the
+        // cell's paragraphs; a paragraph's own text-align inside the cell wins.
+        let f = parse(
+            "<table style='text-align:center'><tbody style='text-align:justify'><tr style='text-align:right'>\
+             <td style='text-align:right;'>r</td><td>inherited</td><td style='text-align:right'><p style='text-align:center'>own</p></td>\
+             <td align=right>attr</td></tr><tr><td>body</td></tr></tbody><tr><td>table</td></tr></table>",
+        );
+        let rows = cell_paras(&f);
+        assert_eq!(rows[0][0][0].align, Some(Align::Right), "td style");
+        assert_eq!(rows[0][1][0].align, Some(Align::Right), "from tr");
+        assert_eq!(rows[0][2][0].align, Some(Align::Center), "own paragraph wins");
+        assert_eq!(rows[0][3][0].align, Some(Align::Right), "align attribute");
+        assert_eq!(rows[1][0][0].align, Some(Align::Justify), "from tbody");
+        assert_eq!(rows[2][0][0].align, Some(Align::Center), "from table");
+        // `align` on a table places the table; it doesn't align the text in its cells.
+        let f = parse("<table align=center><tr><td>x</td></tr></table>");
+        assert_eq!(cell_paras(&f)[0][0][0].align, None);
+    }
+
+    #[test]
+    fn reporter_sample_header_bold_and_right_aligned_cells() {
+        // #1381: the reporter's table.
+        let f = parse(
+            "<table border=\"1\" style=\"width:100%;border-collapse:collapse;\">\n<thead><tr style=\"background-color:#e8f0fa;\"><th>Indicatore</th><th>Valore atteso</th></tr></thead>\n<tbody>\n<tr><td>Audit</td><td style=\"text-align:right;\">4</td></tr>\n</tbody></table>",
+        );
+        let rows = cell_paras(&f);
+        assert!(all_bold(&rows[0][0][0]) && all_bold(&rows[0][1][0]), "{:?}", rows[0]);
+        assert_eq!(rows[1][1][0].align, Some(Align::Right));
+        assert_eq!(rows[1][0][0].align, None);
     }
 
     #[test]

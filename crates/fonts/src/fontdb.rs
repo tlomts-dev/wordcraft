@@ -459,6 +459,11 @@ fn read_fallback_file(path: &std::path::Path) -> Option<Vec<u8>> {
 /// Families preferred for right-to-left scripts (Persian, Arabic, Urdu, Hebrew) when the
 /// document's font lacks them: open fonts with full Persian coverage first (the Persian-only
 /// letters پ چ ژ گ, the Persian digits), then the platforms' own.
+/// Right-to-left script fonts (Hebrew, Arabic, Persian, Syriac…) in fallback order.
+/// Windows prioritizes David/Miriam (Office) and Segoe UI (standard).
+/// macOS prioritizes Helvetica, Geeza Pro (system), and SF fonts.
+/// Linux uses Noto fonts.
+#[cfg(windows)]
 pub const RTL_FALLBACKS: &[&str] = &[
     "Vazirmatn",
     "Noto Naskh Arabic",
@@ -468,13 +473,31 @@ pub const RTL_FALLBACKS: &[&str] = &[
     "Shabnam",
     "Samim",
     "Noto Sans Hebrew",
+    "David",
+    "Miriam",
     "Segoe UI",
     "Tahoma",
-    "Geeza Pro",
-    "SF Arabic",
     "Arial",
     "DejaVu Sans",
 ];
+
+#[cfg(target_os = "macos")]
+pub const RTL_FALLBACKS: &[&str] = &[
+    "Helvetica",
+    "Vazirmatn",
+    "Noto Naskh Arabic",
+    "Noto Sans Arabic",
+    "Noto Sans Hebrew",
+    "Geeza Pro",
+    "SF Arabic",
+    "Arial",
+    "Tahoma",
+    "DejaVu Sans",
+];
+
+#[cfg(not(any(windows, target_os = "macos")))]
+pub const RTL_FALLBACKS: &[&str] =
+    &["Noto Naskh Arabic", "Noto Sans Arabic", "Noto Sans Hebrew", "Vazirmatn", "Segoe UI", "Arial", "Tahoma", "DejaVu Sans"];
 
 /// Families tried (when installed) for characters the loaded fonts lack: CJK, symbols, emoji.
 #[cfg(not(target_arch = "wasm32"))]
@@ -867,13 +890,13 @@ fn style_italic(style: &str) -> bool {
 impl FontDb {
     /// A database holding the bundled fonts, then the craft-fonts Japanese faces (Mincho first,
     /// so they are the fallback for Japanese text after the requested and bundled fonts), then the
-    /// craft-fonts Simplified Chinese faces, for the ideographs the Japanese fonts lack, and its
-    /// Arabic faces (the fallback for Arabic-script text; the only one in the browser, which has
-    /// no system fonts). All are empty without `CRAFT_FONTS_DIR`. The system font scan reads
-    /// `font_dirs`.
+    /// other craft-fonts faces: Simplified Chinese, for the ideographs the Japanese fonts lack, and
+    /// Arabic, so Arabic and Persian text draws without system fonts (#1652) (all empty without
+    /// `CRAFT_FONTS_DIR`), whose system font scan reads `font_dirs`.
     pub fn with_font_dirs(font_dirs: Vec<std::path::PathBuf>) -> Self {
         let mut faces = Vec::new();
-        let craft = crate::japanese_document_fonts().into_iter().chain(crate::chinese_fonts()).chain(crate::arabic_fonts()).map(|f| f.bytes);
+        let others = crate::CRAFT_FONTS.iter().filter(|f| !f.scripts.contains(&"Jpan"));
+        let craft = crate::japanese_document_fonts().into_iter().chain(others).map(|f| f.bytes);
         for data in BUNDLED.iter().copied().chain(craft) {
             for f in enumerate_faces(data) {
                 if let Some(mut face) = make_face(FontBytes::Static(data), f.index, f.family, f.style, f.legacy, f.coords) {

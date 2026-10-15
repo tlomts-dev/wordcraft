@@ -87,6 +87,9 @@
 	Book Title	Könyvcím
 	Bookmark	Könyvjelző
 	Bookmark name:	Könyvjelző neve:
+	Delete Bookmark	Könyvjelző törlése
+	Hidden bookmarks	Rejtett könyvjelzők
+	Sort by:	Rendezés:
 	Border Painter	Szegélyfestő
 	Border\nPainter	Szegély-\nfestő
 	Borders	Szegélyek
@@ -191,6 +194,7 @@
 	Delete Style	Stílus törlése
 	Delete Table	Táblázat törlése
 	Design	Tervezés
+	No document is open. Create a document or open one first.	Nincs megnyitott dokumentum. Előbb hozz létre vagy nyiss meg egyet.
 	development build	fejlesztői kiadás
 	Diagonal	Átlós
 	Diamond	Rombusz
@@ -327,6 +331,7 @@
 	Immersive	Elmélyült
 	Immersive Reader	Elmélyült olvasás
 	Immersive\nReader	Elmélyült\nolvasás
+	In the margin	A margón
 	Increase Font Size	Betűméret növelése
 	Increase Indent	Behúzás növelése
 	Indent	Behúzás
@@ -380,6 +385,8 @@
 	Labels	Címkék
 	Landscape	Fekvő
 	Language	Nyelv
+	{language} (no dictionary)	{language} (nincs szótár)
+	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	A(z) {language} nyelvhez nincs telepítve helyesírási szótár, ezért nem ellenőrzi. A WordCraft a(z) {name} Hunspell-szótárat a WORDCRAFT_DICTIONARIES mappában és a szokásos rendszerhelyeken keresi.
 	Lasso	Lasszó
 	Last Column	Utolsó oszlop
 	Last commit	Utolsó commit
@@ -481,6 +488,7 @@
 	OK	OK
 	One	Egy
 	One Page	Egy oldal
+	Only for the selected text	Csak a kijelölt szövegnél
 	Open	Megnyitás
 	OpenDocument Text (*.odt)	OpenDocument szöveg (*.odt)
 	Optional Hyphen	Feltételes kötőjel
@@ -1147,15 +1155,6 @@
 	Gallery	Galéria
 	Sketchbook	Vázlatfüzet
 	Studio	Stúdió
-	Letter   8.50" × 11.00"	Letter   8,50" × 11,00"
-	Legal   8.50" × 14.00"	Legal   8,50" × 14,00"
-	Executive   7.25" × 10.50"	Executive   7,25" × 10,50"
-	Statement   5.50" × 8.50"	Statement   5,50" × 8,50"
-	Tabloid   11.00" × 17.00"	Tabloid   11,00" × 17,00"
-	B4 (JIS)   10.12" × 14.33"	B4 (JIS)   10,12" × 14,33"
-	B5 (JIS)   7.17" × 10.12"	B5 (JIS)   7,17" × 10,12"
-	Envelope #10   4.12" × 9.50"	Boríték #10   4,12" × 9,50"
-	Envelope DL   4.33" × 8.66"	Boríték DL   4,33" × 8,66"
 	Plain Table 1	Egyszerű táblázat 1
 	Grid Table 1 Light	Rácsos táblázat 1, világos
 	Grid Table 4 – Blue	Rácsos táblázat 4 – kék
@@ -1582,6 +1581,8 @@
 	Outside border	Külső szegély
 	Overtype	Felülírás
 	Overtype (typing replaces the characters after the caret)	Felülírás (a gépelés a kurzor utáni karaktereket cseréli)
+	Show alignment guides when moving pictures and shapes	Igazítási segédvonalak megjelenítése képek és alakzatok mozgatásakor
+	Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely.	A mozgatott objektumok a lap széleihez és közepéhez, a margókhoz és más objektumokhoz illeszkednek. Szabad mozgatáshoz tartsa lenyomva az Alt billentyűt.
 	Page display	Oldalmegjelenítés
 	Paragraph marks	Bekezdésjelek
 	Personalize	Személyre szabás
@@ -1739,7 +1740,8 @@
 	Formatted	Formázott
 	Deleted	Törölve
 	Interface size:	Felület mérete:
-	Makes the ribbon, menus and dialogs larger or smaller, on top of your system's display scaling. Document zoom is separate.	A menüszalag, a menük és a párbeszédablakok nagyítása vagy kicsinyítése a rendszer kijelzőméretezésén felül. A dokumentum nagyítása ettől független.
+	Auto ({percent}%)	Automatikus ({percent}%)
+	Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate.	A menüszalag, a menük és a párbeszédablakok nagyítása vagy kicsinyítése. Az Automatikus a rendszer kijelzőméretezését követi; 100% pontonként egy képernyőpixel. A dokumentum nagyítása ettől független.
 	Copyright Sign	Copyright jel
 	Demote	Lefokozás
 	Edit Field Code	Mezőkód szerkesztése
@@ -1760,6 +1762,7 @@
 	Selected Fields	Kijelölt mezők
 	Toggle Field Codes	Mezőkódok átváltása
 	Toggle Unicode Character	Unicode-karakter átváltása
+	Type Character Code	Karakterkód beírása
 	Trademark Sign	Védjegy jele
 	Unlink Fields	Mezők leválasztása
 	Unlock Fields	Mezők feloldása
@@ -2193,6 +2196,7 @@
 	Hyphenation Options…	Elválasztási beállítások…
 	Hyphenation zone:	Elválasztási zóna:
 	Italian	Olasz
+	Croatian	Horvát
 	Japanese	Japán
 	Korean	Koreai
 	Limit consecutive hyphens to:	Egymást követő elválasztások legfeljebb:
@@ -2317,6 +2321,7 @@
 	Previous Page	Előző oldal
 	Print to PDF	Nyomtatás PDF-be
 	Word XML Document (*.xml)	Word XML-dokumentum (*.xml)
+	Word 2003 XML Document (*.xml)	Word 2003 XML-dokumentum (*.xml)
 	Use wildcards	Helyettesítő karakterek használata
 	Special	Különleges
 	Match prefix	Egyezés a szó elején
@@ -2451,6 +2456,30 @@
 	Reading Column Width	Olvasási oszlopszélesség
 	Reading Line Spacing	Olvasási sorköz
 	Reading Text Size	Olvasási szövegméret
+	Filter Recipients	Címzettek szűrése
+	Sort Recipients	Címzettek rendezése
+	Filter and Sort	Szűrés és rendezés
+	And	És
+	Or	Vagy
+	Comparison	Összehasonlítás
+	Compare to	Összehasonlítás ezzel
+	Add Condition	Feltétel hozzáadása
+	Remove condition	Feltétel eltávolítása
+	Sort by	Rendezés alapja
+	Then by	Majd
+	Ascending	Növekvő
+	Descending	Csökkenő
+	Equal to	Egyenlő
+	Not equal to	Nem egyenlő
+	Less than	Kisebb, mint
+	Greater than	Nagyobb, mint
+	Less than or equal	Kisebb vagy egyenlő
+	Greater than or equal	Nagyobb vagy egyenlő
+	Is blank	Üres
+	Is not blank	Nem üres
+	Contains	Tartalmazza
+	Does not contain	Nem tartalmazza
+	{count} of {total} recipients will be merged.	{total} címzettből {count} kerül egyesítésre.
 	Undo Actions	Több művelet visszavonása
 	Undo History	Visszavonási előzmények
 	Undo 1 Action	1 művelet visszavonása
@@ -2464,12 +2493,112 @@
 	Automatic ({region})	Automatikus ({region})
 	Picture	Kép
 	Pastes the clipboard's picture.	Beilleszti a vágólapon lévő képet.
+	Text of the nearest paragraph with a given style (running headers)	Az adott stílusú legközelebbi bekezdés szövege (élőfejek)
+	Style name:	Stílus neve:
+	Take the last match on the page	A lap utolsó találatának használata
+	Show its list number	A listaszámának megjelenítése
+	Show its number relative to this field	A számának megjelenítése ehhez a mezőhöz képest
+	Show its number with all higher levels	A számának megjelenítése az összes felső szinttel
+	Number only, without the label's words	Csak a szám, a címke szavai nélkül
+	Add whether it is above or below	Annak jelzése, hogy feljebb vagy lejjebb van
 	Select Column	Oszlop kijelölése
 	Select Table Cells by Clicking	Táblázatcellák kijelölése kattintással
 	Insert Row or Column by Clicking	Sor vagy oszlop beszúrása kattintással
 	Move Table by Dragging	Táblázat áthelyezése húzással
-	AutoFit Column by Double-Clicking	Oszlop automatikus igazítása dupla kattintással
+	AutoFit Column by Double-Clicking	Oszlop automatikus méretezése dupla kattintással
 	Insert Caption…	Felirat beszúrása…
 	Table Properties…	Táblázat tulajdonságai…
 	Search	Keresés
-	Title Bar	Címsor
+	Copy to	Másolás ide
+
+# Document naming and account controls.
+	Rename Document	Dokumentum átnevezése
+	Document name	Dokumentum neve
+	Rename	Átnevezés
+	Account	Fiók
+	Privacy Options	Adatvédelmi beállítások
+	Trust Center	Adatvédelmi központ
+	Privacy for this document	A dokumentum adatvédelme
+	Remove my name from comments, changes and file properties when saving	Mentéskor a nevem eltávolítása a megjegyzésekből, a módosításokból és a fájl tulajdonságaiból
+	Leave out the date and time of comments and tracked changes when saving	Mentéskor a megjegyzések és a követett módosítások dátumának és idejének elhagyása
+	The document you are editing keeps the names and dates; only the saved file leaves them out.	A szerkesztett dokumentum megtartja a neveket és a dátumokat; csak a mentett fájlból maradnak ki.
+	Privacy Settings	Jelenlegi adatvédelmi beállítások
+	Waiting for the save to finish…	Várakozás a mentés befejezésére…
+	Saving {name} was cancelled, so it is still open and nothing was lost.	A(z) {name} mentése megszakadt, így továbbra is nyitva van, és semmi sem veszett el.
+	Paper	Papír
+	Paper size:	Papírméret:
+	Custom size	Egyéni méret
+	More Paper Sizes…	További papírméretek…
+	The margins don't fit on a page this size; make the margins smaller first.	A margók nem férnek el ekkora oldalon; először csökkentse a margókat.
+	Full Screen	Teljes képernyő
+	Full\nScreen	Teljes\nképernyő
+	Use the browser's full screen (F11)	Használja a böngésző teljes képernyős módját (F11)
+
+# #1128: size labels (Mailings, Layout › Size), status-bar messages, Reading Mode and Go To
+	{name}   {height} × {width} in	{name}   {height} × {width} hüvelyk
+	{name}   {height} × {width} mm	{name}   {height} × {width} mm
+	{width} × {height} mm	{width} × {height} mm
+	{kind}, {columns} × {rows}, {size} ({paper})	{kind}, {columns} × {rows}, {size} ({paper})
+	Researcher needs an online service; WordCraft keeps your documents offline.	A Kutatássegédhez online szolgáltatás kell; a WordCraft a dokumentumait offline tartja.
+	These settings will be used for new documents.	Ezek a beállítások az új dokumentumokra lesznek érvényesek.
+	can't split at the first row	a táblázat nem osztható fel az első sornál
+	select two or more cells to merge	jelöljön ki legalább két cellát az egyesítéshez
+	there is no ink to replay	nincs visszajátszható tinta
+	there's no citation after the caret	a kurzor után nincs forráshivatkozás
+	this item is already at the top level	ez az elem már a legfelső szinten van
+	Envelope #10	Boríték #10
+	Envelope DL	Boríték DL
+	Reading Mode	Olvasó mód
+	Column width	Oszlopszélesség
+	Text size	Szövegméret
+	Edit Document	Dokumentum szerkesztése
+	Go to what:	Ugrás ide:
+	Type +2 or -1 to move from the page you are on.	Írd be: +2 vagy -1, ha az aktuális oldalhoz képest szeretnél lépni.
+	Suggested	Javaslatok
+	Set Proofing Language…	Nyelvi ellenőrzés nyelvének beállítása…
+	Language Preferences…	Nyelvi beállítások…
+	Title Bar	Címsáv
+	Printer	Nyomtató
+	Select a printer	Válasszon nyomtatót
+	Refresh printers	Nyomtatók frissítése
+	Two-sided printing	Kétoldalas nyomtatás
+	Printer default	Nyomtató alapértelmezése
+	One-sided	Egyoldalas
+	Two-sided: long edge	Kétoldalas: hosszú él
+	Two-sided: short edge	Kétoldalas: rövid él
+	Grayscale	Szürkeárnyalatos
+	Finding printers…	Nyomtatók keresése…
+	No printers found. Configure a system printer or export a PDF.	Nem található nyomtató. Állítson be egy rendszernyomtatót, vagy exportáljon PDF-et.
+	Printer discovery failed.	A nyomtatók keresése sikertelen.
+	Submitting print job…	Nyomtatási feladat küldése…
+	Print job submitted.	Nyomtatási feladat elküldve.
+	Print job submitted: {receipt}	Nyomtatási feladat elküldve: {receipt}
+	Print failed: the printing worker stopped.	A nyomtatás sikertelen: a nyomtatási folyamat leállt.
+	Print settings	Nyomtatási beállítások
+	Submit print job	Nyomtatási feladat küldése
+
+# Cross-reference dialog (#1003)
+	For which item:	Melyik elemhez:
+	Heading	Címsor
+	Heading text	Címsor szövege
+	Insert reference to:	Hivatkozás beszúrása erre:
+	Reference type:	Hivatkozás típusa:
+
+# Dictionaries folder (#1063)
+	Dictionaries	Szótárak
+	Dictionaries folder:	Szótárak mappája:
+	Not set: the system's usual places	Nincs beállítva: a rendszer szokásos helyei
+	Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.	Az ebben a mappában lévő Hunspell .aff és .dic fájlok (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) elsőbbséget élveznek a rendszer fájljaival szemben.
+	{language}: {file}	{language}: {file}
+	{language}: no dictionary found	{language}: nem található szótár
+
+# Backstage › Recover (#586)
+	Recover	Helyreállítás
+
+# Page Setup › Mirror margins (#1239)
+	Mirror margins	Tükrözött margók
+
+# Insert Hyperlink › Place in This Document (#1370)
+	Existing File or Web Page	Létező fájl vagy weblap
+	Link to:	Hivatkozás helye:
+	Place in This Document	Dokumentumon belüli hely

@@ -362,6 +362,26 @@ pub fn tidy(root: &mut Arg) {
     go(root, 0);
 }
 
+/// Call `f` on every run in the tree.
+pub fn each_run_mut(root: &mut Arg, f: &mut dyn FnMut(&mut MRun)) {
+    fn go(a: &mut Arg, f: &mut dyn FnMut(&mut MRun), depth: usize) {
+        if depth > MAX_DEPTH {
+            return;
+        }
+        for n in a.iter_mut() {
+            if let MNode::Run(r) = n {
+                f(r);
+            }
+            for c in 0..child_count(n) {
+                if let Some(ch) = child_mut(n, c) {
+                    go(ch, f, depth + 1);
+                }
+            }
+        }
+    }
+    go(root, f, 0);
+}
+
 fn merge_shallow(a: Arg) -> Arg {
     let mut out: Arg = Vec::with_capacity(a.len());
     for n in a {
@@ -1177,6 +1197,21 @@ mod tests {
         let p = insert_text(&mut eq, &MathPos::default(), "\\frac{a}{b}", TypeStyle::default());
         assert!(build_up(&mut eq, &p, true).is_some());
         assert!(matches!(eq[0], MNode::Frac { .. }));
+    }
+
+    #[test]
+    fn build_up_keeps_a_multi_letter_subscript() {
+        // #1609: `dd` typed in a subscript box split into V_d and d on the next space.
+        let mut eq: Arg = Vec::new();
+        let p = insert_nodes(&mut eq, &MathPos::default(), parse_linear("⬚_⬚"));
+        let p = insert_text(&mut eq, &p, "V", TypeStyle::default());
+        let p = move_right(&eq, &p).unwrap();
+        let p = insert_text(&mut eq, &p, "dd", TypeStyle::default());
+        let p = move_right(&eq, &p).unwrap();
+        assert_eq!(p, MathPos::new(vec![], 1));
+        let built = eq.clone();
+        assert_eq!(build_up(&mut eq, &p, false), None);
+        assert_eq!(eq, built, "{}", lin(&eq));
     }
 
     #[test]

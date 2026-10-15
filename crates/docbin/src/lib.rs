@@ -8,12 +8,14 @@
 //! capped), so hostile input yields an error or a best-effort document, never a panic.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod crypt;
 mod drawing;
 mod fib;
 mod fkp;
 mod fmt;
 mod list;
 mod media;
+mod metadata;
 mod notes;
 mod officeart;
 mod piece;
@@ -43,6 +45,10 @@ use table::ParaOut;
 const MAX_STREAM: u64 = 1 << 30;
 /// Most header/footer parts we create (matches the docx reader's cap).
 const MAX_PARTS: usize = 50_000;
+/// Hard ceiling on characters materialised across every story walk of one document (body,
+/// headers, notes, text boxes), whatever the file's size. The working budget is tied to the
+/// WordDocument stream (see [`read`]); this caps even a maximal stream.
+const MAX_TOTAL_CHARS: u64 = 64 << 20;
 /// `sprmCPicLocation`: the fc of a picture in the Data stream.
 const C_PIC_LOCATION: u16 = 0x6A03;
 /// `sprmPIlvl` / `sprmPIlfo`: the paragraph's list level and list.
@@ -58,9 +64,16 @@ pub enum DocbinError {
     /// The compound file is readable but is not a Word 97-2003 document.
     #[error("not a Word 97-2003 document: {0}")]
     NotWord(String),
-    /// The document is password-protected (XOR obfuscation or RC4 encryption).
-    #[error("encrypted or password-protected .doc files are not supported")]
-    Encrypted,
+    /// The document is password-protected and no password was given.
+    #[error("this document is protected with a password")]
+    PasswordRequired,
+    /// The password does not open the document.
+    #[error("the password is incorrect")]
+    WrongPassword,
+    /// The document is encrypted in a way WordCraft can't read (AES, an external provider, an
+    /// unknown header).
+    #[error("encrypted document: {0}")]
+    Encryption(String),
     /// The input exceeds a safety limit (stream size, piece count…).
     #[error("limit exceeded: {0}")]
     Limit(String),
@@ -69,25 +82,51 @@ pub enum DocbinError {
     Malformed(String),
 }
 
-/// Read a `.doc` (Word 97-2003 binary) file into a [`Document`].
+/// Is this `.doc` password-protected (XOR obfuscation, RC4 or RC4 CryptoAPI)? False for
+/// anything that is not a readable Word 97-2003 file.
+pub fn is_encrypted(bytes: &[u8]) -> bool {
+    let Ok(mut comp) = cfb::CompoundFile::open(std::io::Cursor::new(bytes)) else { return false };
+    stream(&mut comp, "WordDocument").is_some_and(|w| fib::peek_encryption(&w).is_some())
+}
+
+/// Read a `.doc` (Word 97-2003 binary) file into a [`Document`]. A password-protected file
+/// gives [`DocbinError::PasswordRequired`]; see [`read_with_password`].
 pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
+    read_with_password(bytes, None)
+}
+
+/// [`read`] for a file that may be password-protected: it is checked against the file's stored
+/// verifier ([`DocbinError::WrongPassword`] when it does not match) and then decrypted. The
+/// password is ignored for an unprotected file.
+pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Document, DocbinError> {
     let mut comp = cfb::CompoundFile::open(std::io::Cursor::new(bytes)).map_err(|e| DocbinError::Container(e.to_string()))?;
-    let word = stream(&mut comp, "WordDocument").ok_or_else(|| DocbinError::NotWord("no WordDocument stream".into()))?;
+    let mut word = stream(&mut comp, "WordDocument").ok_or_else(|| DocbinError::NotWord("no WordDocument stream".into()))?;
     if word.len() as u64 > MAX_STREAM {
         return Err(DocbinError::Limit(format!("WordDocument stream is {} bytes", word.len())));
     }
-    let fib = fib::Fib::parse(&word)?;
-    if fib.encrypted {
-        return Err(DocbinError::Encrypted);
-    }
+    let enc = fib::peek_encryption(&word);
     // The FIB names the Table stream (0Table or 1Table); fall back to whichever exists,
     // since files written by other writers sometimes carry the wrong bit.
-    let named = if fib.which_tbl_stm { "1Table" } else { "0Table" };
-    let other = if fib.which_tbl_stm { "0Table" } else { "1Table" };
-    let table = stream(&mut comp, named).or_else(|| stream(&mut comp, other)).unwrap_or_default();
+    let which = if let Some(e) = enc { e.which_tbl_stm } else { fib::Fib::parse(&word)?.which_tbl_stm };
+    let named = if which { "1Table" } else { "0Table" };
+    let other = if which { "0Table" } else { "1Table" };
+    let mut table = stream(&mut comp, named).or_else(|| stream(&mut comp, other)).unwrap_or_default();
     if table.len() as u64 > MAX_STREAM {
         return Err(DocbinError::Limit(format!("Table stream is {} bytes", table.len())));
     }
+    let mut data = stream(&mut comp, "Data").unwrap_or_default();
+    if data.len() as u64 > MAX_STREAM {
+        return Err(DocbinError::Limit(format!("Data stream is {} bytes", data.len())));
+    }
+    if let Some(e) = enc {
+        // Verify the password first; only then is anything decrypted.
+        let password = password.ok_or(DocbinError::PasswordRequired)?;
+        let cipher = crypt::Cipher::open(e.flags, e.lkey, &table, password)?;
+        cipher.decrypt_word(&mut word);
+        cipher.decrypt_table(&mut table);
+        cipher.decrypt_data(&mut data);
+    }
+    let fib = fib::Fib::parse(&word)?;
 
     // The piece table locates every character in the WordDocument stream.
     let (fc_clx, lcb_clx) =
@@ -109,12 +148,10 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
         None => Bins::parse(&[], 0, 0)?,
     };
 
-    let data = stream(&mut comp, "Data").unwrap_or_default();
-    if data.len() as u64 > MAX_STREAM {
-        return Err(DocbinError::Limit(format!("Data stream is {} bytes", data.len())));
-    }
-
     let mut doc = Document::new();
+    if let Some(core) = metadata::read(&mut comp) {
+        doc.core = core;
+    }
     doc.body.clear();
     doc.styles = fmt::stylesheet(&raw_styles, &fonts);
     doc.numbering = list::parse(&table, &fib, &fonts);
@@ -129,6 +166,12 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
     let hdd_base = fib.ccp.text.saturating_add(fib.ccp.ftn);
     let edn_base = hdd_base.saturating_add(fib.ccp.hdd).saturating_add(fib.ccp.atn);
     let mut pics = media::Pictures::default();
+    // Every materialised character comes from at least one byte of the WordDocument stream, so a
+    // legitimate document's total text (body plus every header, footnote and text box, each read
+    // once) cannot exceed its stream. A hostile piece or story table that aliases the same bytes
+    // many times can, so the walk is held to twice the stream's size — generous for real files,
+    // tight against aliasing — and never past the absolute ceiling.
+    let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
 
     let ctx = WalkCtx {
         word: &word,
@@ -143,6 +186,7 @@ pub fn read(bytes: &[u8]) -> Result<Document, DocbinError> {
         marks: &[],
         drawn: &[],
         sect_ends: &[],
+        budget: &budget,
     };
 
     // Drawings: text box stories become parts first, then the floating shapes and pictures
@@ -283,6 +327,10 @@ struct WalkCtx<'a> {
     /// Where sections end (main-document CPs, sorted): the section mark (0x0C) just before
     /// each ends the section's last paragraph, it isn't a page break inside it.
     sect_ends: &'a [u32],
+    /// Characters still allowed across every story walk of this document. Story ranges (headers,
+    /// footnotes, text boxes) are hostile and can each span a whole subdocument, so thousands of
+    /// them could otherwise materialise the same text thousands of times; this bounds the total.
+    budget: &'a std::cell::Cell<u64>,
 }
 
 /// State while assembling one paragraph from per-CP formatting.
@@ -356,6 +404,12 @@ fn walk(ctx: &WalkCtx, cp_start: u32, cp_end: u32, pics: &mut media::Pictures) -
                 continue;
             }
         };
+        // Every real character counts against the document-wide budget; once it is spent, stop
+        // (a hostile file with thousands of story ranges over the same text can't multiply on).
+        if ctx.budget.get() == 0 {
+            break;
+        }
+        ctx.budget.set(ctx.budget.get() - 1);
         // A section mark (0x0C) at a section's end is that section's last paragraph mark.
         let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&cp.saturating_add(1)).is_ok();
         match c {
@@ -521,7 +575,7 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild) {
         return;
     }
     pb.push('\u{FFFC}', CharProps::default());
-    pb.objects.push(InlineObject::Field { instr, result: result_text, locked: false, code: false });
+    pb.objects.push(InlineObject::Field { instr, result: result_text, locked: false, code: false, form: String::new() });
 }
 
 /// `HYPERLINK "url"` / `HYPERLINK url \l "bookmark"` → the model link target

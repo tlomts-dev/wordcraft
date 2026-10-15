@@ -41,6 +41,10 @@ pub struct Style {
     /// (`w:locked`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub locked: bool,
+    /// The default style of its kind (`w:default`), whatever its id: localized documents call
+    /// the default character, table and list styles something other than the English ids.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub default: bool,
     /// Table style: conditional formatting for header row, banding etc.
     pub table: Option<TableStyleParts>,
 }
@@ -142,6 +146,10 @@ pub struct StyleSheet {
     /// the application; nonempty `default_para` is always written after spacing edits.
     pub default_para_present: bool,
     pub styles: Vec<Style>,
+    /// The file's `w:latentStyles` (behaviour of built-in styles not defined in the document:
+    /// gallery, priority, visibility), as XML, written back as is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latent_styles: Option<String>,
 }
 
 impl Default for StyleSheet {
@@ -168,7 +176,13 @@ fn color(c: Rgb) -> Option<TextColor> {
 
 impl StyleSheet {
     pub fn empty() -> Self {
-        StyleSheet { default_chr: CharProps::default(), default_para: ParaProps::default(), default_para_present: true, styles: Vec::new() }
+        StyleSheet {
+            default_chr: CharProps::default(),
+            default_para: ParaProps::default(),
+            default_para_present: true,
+            styles: Vec::new(),
+            latent_styles: None,
+        }
     }
 
     /// The built-in style set used for new documents.
@@ -184,6 +198,7 @@ impl StyleSheet {
             },
             default_para_present: true,
             styles: Vec::new(),
+            latent_styles: None,
         };
         let mut add = |st: Style| s.styles.push(st);
         add(Style { id: "Normal".into(), name: "Normal".into(), priority: Some(0), quick: true, ..p_style() });
@@ -483,6 +498,33 @@ impl StyleSheet {
             None => self.styles.push(st),
         }
     }
+    /// For a file from a producer that never writes `w:qFormat` (LibreOffice): give it Word's
+    /// usual Quick Styles gallery. Each built-in style whose id or name matches a quick style of
+    /// [`StyleSheet::builtin`] becomes quick (taking the built-in's priority when it has none), and
+    /// the quick built-ins the file lacks are added with their linked styles. Existing ids and
+    /// names are never overwritten. Callers use it only when no style in the file is quick.
+    pub fn add_default_gallery(&mut self) {
+        let builtin = StyleSheet::builtin();
+        for q in builtin.styles.iter().filter(|s| s.quick && s.kind != StyleKind::Table) {
+            let found =
+                self.styles.iter().position(|s| s.id == q.id).or_else(|| self.styles.iter().position(|s| s.name.eq_ignore_ascii_case(&q.name)));
+            if let Some(st) = found.and_then(|i| self.styles.get_mut(i)) {
+                if st.builtin && st.kind == q.kind {
+                    st.quick = true;
+                    st.priority = st.priority.or(q.priority);
+                }
+                continue;
+            }
+            for sid in std::iter::once(q.id.as_str()).chain(q.linked.as_deref()) {
+                if let Some(b) = builtin.get(sid)
+                    && self.get(sid).is_none()
+                    && self.find(&b.name).is_none()
+                {
+                    self.styles.push(b.clone());
+                }
+            }
+        }
+    }
     /// Remove style `id` and return it. Styles based on it are rebased onto its own base, and
     /// `next` / `linked` references to it are dropped. Text that uses it is the document's to
     /// retarget ([`crate::Document::restyle`]).
@@ -603,6 +645,32 @@ mod tests {
         let g = s.gallery();
         assert_eq!(g.first().map(|s| s.id.as_str()), Some("Normal"));
         assert!(g.iter().any(|s| s.id == "Heading1"));
+    }
+
+    #[test]
+    fn default_gallery_marks_and_adds_quick_builtins() {
+        let b = StyleSheet::builtin();
+        let mut s = StyleSheet::empty();
+        let plain = |id: &str, name: &str| Style { id: id.into(), name: name.into(), builtin: true, ..Default::default() };
+        s.styles.push(plain("Normal", "Normal"));
+        s.styles.push(plain("Heading1", "heading 1"));
+        s.styles.push(Style { priority: Some(7), ..plain("Heading2", "Heading 2") });
+        s.styles.push(Style { builtin: false, ..plain("Heading3", "Heading 3") });
+        s.styles.push(Style { para: ParaProps { space_after: Some(99.0), ..Default::default() }, ..plain("Custom1", "Subtitle") });
+        s.add_default_gallery();
+        let ids: Vec<&str> = s.gallery().iter().map(|x| x.id.as_str()).collect();
+        for id in ["Normal", "NoSpacing", "Heading1", "Heading2", "Title"] {
+            assert!(ids.contains(&id), "{id} in {ids:?}");
+        }
+        let mut bare = StyleSheet::empty();
+        bare.add_default_gallery();
+        assert!(bare.get("Heading1").is_some_and(|x| x.quick) && bare.get("Title").is_some(), "missing quick builtins added");
+        assert_eq!(s.get("Heading2").and_then(|x| x.priority), Some(7), "file priority kept");
+        assert_eq!(s.get("Heading1").and_then(|x| x.priority), b.get("Heading1").and_then(|x| x.priority));
+        assert!(!s.get("Heading3").is_some_and(|x| x.quick), "custom style untouched");
+        assert!(s.get("Subtitle").is_none(), "a style with that name exists: not duplicated");
+        assert!(s.get("Custom1").is_some_and(|x| x.quick), "found by name only, built in: quick");
+        assert_eq!(s.get("Custom1").and_then(|x| x.para.space_after), Some(99.0));
     }
 
     #[test]

@@ -264,7 +264,9 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(14.5, 7.0), (16.0, 8.5), (17.5, 7.0)]);
         }
         "select" => {
-            pen.fill(&[(5.0, 3.0), (5.0, 16.0), (8.0, 13.0), (10.5, 18.0), (12.5, 17.0), (10.0, 12.0), (14.0, 12.0)], c);
+            // Overlapping convex pieces keep the concave arrow intact without antialiasing seams.
+            pen.fill(&[(5.0, 3.0), (5.0, 16.0), (14.0, 12.0)], c);
+            pen.fill(&[(8.0, 13.0), (10.5, 18.0), (12.5, 17.0), (10.0, 12.0)], c);
         }
         "dictate" => {
             pen.rect(7.5, 2.5, 12.5, 12.0, c);
@@ -1050,6 +1052,18 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.rect(3.0, 3.0, 17.0, 17.0, c);
             pen.line_c(&[(3.0, 10.0), (17.0, 10.0)], a);
         }
+        "fullScreen" => {
+            // A screen with arrows out to its four corners.
+            pen.rect(2.0, 3.5, 18.0, 16.5, c);
+            pen.line_c(&[(5.0, 8.5), (5.0, 6.0), (7.5, 6.0)], a);
+            pen.line_c(&[(12.5, 6.0), (15.0, 6.0), (15.0, 8.5)], a);
+            pen.line_c(&[(15.0, 11.5), (15.0, 14.0), (12.5, 14.0)], a);
+            pen.line_c(&[(7.5, 14.0), (5.0, 14.0), (5.0, 11.5)], a);
+            pen.line_c(&[(5.0, 6.0), (8.0, 8.5)], a);
+            pen.line_c(&[(15.0, 6.0), (12.0, 8.5)], a);
+            pen.line_c(&[(15.0, 14.0), (12.0, 11.5)], a);
+            pen.line_c(&[(5.0, 14.0), (8.0, 11.5)], a);
+        }
         "sideBySide" | "syncScroll" | "switchWindows" => {
             pen.rect(2.0, 4.0, 9.5, 16.0, c);
             pen.rect(10.5, 4.0, 18.0, 16.0, a);
@@ -1285,6 +1299,11 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line_c(&[(14.0, 5.0), (14.0, 15.0)], a);
             pen.line_c(&[(12.5, 6.5), (14.0, 5.0), (15.5, 6.5)], a);
             pen.line_c(&[(12.5, 13.5), (14.0, 15.0), (15.5, 13.5)], a);
+        }
+        "crop" => {
+            // Two right angles overlapping: the crop marks.
+            pen.line_c(&[(6.0, 2.0), (6.0, 14.0), (18.0, 14.0)], c);
+            pen.line_c(&[(2.0, 6.0), (14.0, 6.0), (14.0, 18.0)], a);
         }
         "textBoxLink" | "textBoxUnlink" => {
             // Two boxes, the text running from the first into the second (broken: cut through).

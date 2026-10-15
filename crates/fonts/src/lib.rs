@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod color;
 mod fontdb;
 pub mod math;
 mod script;
@@ -419,6 +420,22 @@ mod tests {
         let jp: Vec<char> = "日本語".chars().collect();
         let f2 = db.fallback_for_east_asian(&jp, latin.id(), false, false).expect("a CJK face");
         assert!(f2.family.contains("Mincho"), "{f2:?}");
+    }
+
+    #[test]
+    fn arabic_and_persian_fall_back_to_the_craft_fonts_arabic_face() {
+        // #1652: with no system fonts (a headless CLI), Arabic and Persian drew as empty boxes.
+        let Some(arabic) = CRAFT_FONTS.iter().find(|f| f.scripts.contains(&"Arab")) else {
+            eprintln!("skipped: no Arabic face in the optional craft-fonts input");
+            return;
+        };
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let latin = db.face(DEFAULT_FAMILY, "Regular");
+        for c in "مرحبا پچژگ۱۲۳".chars().filter(|c| !c.is_whitespace()) {
+            let fb = db.fallback_for(c, latin.id()).unwrap_or_else(|| panic!("no fallback for {c}"));
+            assert_eq!(fb.family, arabic.family, "{c}");
+        }
     }
 
     #[test]

@@ -41,7 +41,7 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
     match purpose {
         "picture" => &[("Pictures", PICTURES)],
         "font" => &[("Fonts", wordcraft_fonts::FONT_FILE_EXTS)],
-        "recipients" => &[("Recipient lists", &["csv", "tsv", "txt", "xlsx", "xlsm", "ods"]), ("All files", &["*"])],
+        "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
 }
@@ -215,7 +215,13 @@ impl WordApp {
             }
             AfterPick::Export { ext } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                let r = if ext == "png" { self.run("file.exportPng", json!({"path": path})) } else { self.run("file.saveAs", json!({"path": path})) };
+                let r = if ext == "png" {
+                    self.run("file.exportPng", json!({"path": path}))
+                } else if ext == crate::print_page::EXPORT_WORD_2003 {
+                    self.run("file.saveAs", json!({"path": path, "format": ext}))
+                } else {
+                    self.run("file.saveAs", json!({"path": path}))
+                };
                 if r.is_ok() {
                     self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
                 }
@@ -232,10 +238,9 @@ impl WordApp {
                 r
             }
             AfterPick::SaveAs(after) => {
-                let saved = picked.is_some_and(|path| {
-                    self.run("file.save", json!({"path": path}))
-                        .is_ok_and(|v| v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some())
-                });
+                // The save's error, kept for the Save Changes prompt to explain (#1445).
+                let result = picked.map(|path| self.run("file.save", json!({"path": path})));
+                let saved = matches!(&result, Some(Ok(v)) if v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
                 if saved {
                     self.ui.backstage = false;
                     self.canvas.want_focus = true;
@@ -249,6 +254,9 @@ impl WordApp {
                         Ok(json!({"saved": saved}))
                     }
                     AfterSave::Continue { then, params, document } => {
+                        if let Some(Err(error)) = result {
+                            return Err(self.save_failed(&error, then, params, document));
+                        }
                         if !self.safely_saved(saved) || document != self.session.document_id() {
                             return Ok(json!({"done": false}));
                         }
@@ -272,7 +280,8 @@ impl WordApp {
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
-        let name = format!("{}.{ext}", self.title_stem());
+        let file_ext = if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext };
+        let name = format!("{}.{file_ext}", self.title_stem());
         let _ = self.ask_file(FileDialogRequest::Save { name }, AfterPick::Export { ext: ext.to_string() });
     }
 
@@ -433,6 +442,24 @@ mod tests {
         a.open_dialog();
         assert_eq!(shown.borrow().len(), 1, "a new dialog once the first was answered");
         assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into() });
+    }
+
+    /// #1445: "Save changes?" → Save on a new document while another file dialog is still open:
+    /// nothing can be asked, so nothing happens, and the status bar says why.
+    #[test]
+    fn save_changes_while_a_file_dialog_is_open_says_so() {
+        let (mut a, shown) = async_app();
+        typed(&mut a);
+        a.open_dialog();
+        assert_eq!(shown.borrow().len(), 1);
+        a.run("file.close", json!({})).unwrap();
+        a.status_msg = None;
+        let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+        assert_eq!(r["done"], false);
+        assert!(!a.quit_requested);
+        assert!(a.session.dirty && body_text(&a).contains(UNSAVED));
+        let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+        assert!(msg.contains("file dialog is already open"), "the status bar says why: {msg:?}");
     }
 
     /// "Save changes?" → Save on a new document: the held-back Close runs only once the later
